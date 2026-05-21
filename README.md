@@ -104,10 +104,11 @@ conda create -p .\yolo-gpu-env python=3.11 -y
 conda activate .\yolo-gpu-env
 ```
 
-安装 CUDA 版 PyTorch。国内网络可用阿里 PyTorch wheel，同时用清华 PyPI 补普通依赖：
+安装 CUDA 版 PyTorch。先让 PyTorch 三件套走官方 cu121 wheel 源，再用清华 PyPI 补普通依赖：
 
 ```powershell
-pip install -r requirements-gpu-cu121.txt -f https://mirrors.aliyun.com/pytorch-wheels/cu121/ -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements-gpu-cu121.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 安装 Ultralytics 和跟踪依赖：
@@ -134,16 +135,16 @@ macOS 默认按 CPU 环境使用。Intel Mac 没有 CUDA，Apple Silicon 的 `mp
 python3 -m venv yolo-cpu-env
 ```
 
-激活：
+激活环境：
 
 ```bash
 source yolo-cpu-env/bin/activate
 ```
 
-安装：
+安装依赖：
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-cpu.txt
 ```
 
 验证：
@@ -166,7 +167,7 @@ python -c "import torch; print(torch.backends.mps.is_available() if hasattr(torc
 
 ### CPU
 
-激活 CPU 环境：
+Windows 在项目根目录打开 PowerShell，激活 CPU 环境：
 
 ```powershell
 .\yolo-cpu-env\Scripts\Activate.ps1
@@ -176,6 +177,18 @@ python -c "import torch; print(torch.backends.mps.is_available() if hasattr(torc
 
 ```powershell
 python scripts\track_objects_stickers.py
+```
+
+macOS 在项目根目录打开终端，激活 CPU 环境：
+
+```bash
+source yolo-cpu-env/bin/activate
+```
+
+运行默认检测：
+
+```bash
+python scripts/track_objects_stickers.py
 ```
 
 默认会：
@@ -233,8 +246,16 @@ source/
 
 如果要指定某个视频：
 
+Windows PowerShell：
+
 ```powershell
 python scripts\track_objects_stickers.py --source source\your_video.mp4
+```
+
+macOS 终端：
+
+```bash
+python scripts/track_objects_stickers.py --source source/your_video.mp4
 ```
 
 ### 常用检测命令
@@ -417,9 +438,18 @@ web_track_overlay_player/
 
 启动本地服务器：
 
+Windows PowerShell：
+
 ```powershell
 cd web_track_overlay_player
 ..\yolo-cpu-env\Scripts\python.exe -m http.server 8090 --bind 127.0.0.1
+```
+
+macOS 终端：
+
+```bash
+cd web_track_overlay_player
+../yolo-cpu-env/bin/python -m http.server 8090 --bind 127.0.0.1
 ```
 
 打开：
