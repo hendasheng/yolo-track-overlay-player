@@ -1,0 +1,26 @@
+# Local environments
+yolo-cpu-env/
+yolo-gpu-env/
+.venv/
+venv/
+env/
+
+# Generated outputs and input media
+runs/
+source/*
+!source/.gitkeep
+
+# Model weights
+*.pt
+*.onnx
+*.engine
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YOLO Track Overlay Viewer</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="stage">
+        <div id="dropLayer" class="drop-layer">
+          <div class="drop-copy">
+            <strong>Drop video + tracks file</strong>
+            <span>Supports .mp4 with tracks.jsonl or tracks.json</span>
+          </div>
+        </div>
+
+        <div class="media-wrap">
+          <video id="video" playsinline></video>
+          <canvas id="overlay"></canvas>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="brand">
+          <span>YOLO Overlay</span>
+          <small>local preview</small>
+        </div>
+
+        <label class="file-box">
+          <span>Video</span>
+          <input id="videoInput" type="file" accept="video/*" />
+          <b>Choose video</b>
+          <em id="videoName">No video</em>
+        </label>
+
+        <label class="file-box">
+          <span>Tracks</span>
+          <input id="tracksInput" type="file" accept=".jsonl,.json,application/json" />
+          <b>Choose tracks</b>
+          <em id="tracksName">No tracks</em>
+        </label>
+
+        <div class="control">
+          <button id="playToggle" class="primary-button" type="button">Play</button>
+        </div>
+
+        <div class="control">
+          <label for="fpsInput">FPS</label>
+          <input id="fpsInput" type="number" min="1" max="240" step="0.01" value="30" />
+        </div>
+
+        <div class="control">
+          <label for="opacityInput">Fill opacity</label>
+          <input id="opacityInput" type="range" min="0.05" max="0.9" step="0.05" value="0.35" />
+        </div>
+
+        <div class="control">
+          <label for="modeInput">Shape</label>
+          <select id="modeInput">
+            <option value="box">filled boxes</option>
+            <option value="ellipse">ellipses</option>
+            <option value="center">center dots</option>
+          </select>
+        </div>
+
+        <div class="stats">
+          <div><span>Frame</span><strong id="frameStat">-</strong></div>
+          <div><span>Objects</span><strong id="objectStat">-</strong></div>
+          <div><span>Tracks</span><strong id="trackStat">-</strong></div>
+        </div>
+      </aside>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
