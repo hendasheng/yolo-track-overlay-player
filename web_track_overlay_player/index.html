@@ -17,7 +17,7 @@
         </div>
 
         <div class="media-wrap">
-          <video id="video" playsinline></video>
+          <video id="video" playsinline loop></video>
           <canvas id="overlay"></canvas>
         </div>
       </section>
@@ -28,35 +28,35 @@
           <small>local preview</small>
         </div>
 
-        <label class="file-box">
+        <label class="file-box video-file">
           <span>Video</span>
           <input id="videoInput" type="file" accept="video/*" />
           <b>Choose video</b>
           <em id="videoName">No video</em>
         </label>
 
-        <label class="file-box">
+        <label class="file-box tracks-file">
           <span>Tracks</span>
           <input id="tracksInput" type="file" accept=".jsonl,.json,application/json" />
           <b>Choose tracks</b>
           <em id="tracksName">No tracks</em>
         </label>
 
-        <div class="control">
+        <div class="control play-control">
           <button id="playToggle" class="primary-button" type="button">Play</button>
         </div>
 
-        <div class="control">
+        <div class="control fps-control">
           <label for="fpsInput">FPS</label>
           <input id="fpsInput" type="number" min="1" max="240" step="0.01" value="30" />
         </div>
 
-        <div class="control">
+        <div class="control opacity-control">
           <label for="opacityInput">Fill opacity</label>
           <input id="opacityInput" type="range" min="0.05" max="0.9" step="0.05" value="0.35" />
         </div>
 
-        <div class="control">
+        <div class="control shape-control">
           <label for="modeInput">Shape</label>
           <select id="modeInput">
             <option value="box">filled boxes</option>

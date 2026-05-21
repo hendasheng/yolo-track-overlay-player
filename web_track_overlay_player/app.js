@@ -3,6 +3,7 @@ const canvas = document.querySelector("#overlay");
 const ctx = canvas.getContext("2d");
 
 const dropLayer = document.querySelector("#dropLayer");
+const panel = document.querySelector(".panel");
 const videoInput = document.querySelector("#videoInput");
 const tracksInput = document.querySelector("#tracksInput");
 const playToggle = document.querySelector("#playToggle");
@@ -18,6 +19,20 @@ const trackStat = document.querySelector("#trackStat");
 let tracksByFrame = new Map();
 let maxFrame = 0;
 let rafId = 0;
+let videoFrameCallbackId = 0;
+let canvasCssWidth = 0;
+let canvasCssHeight = 0;
+let cachedFit = null;
+let lastRenderedFrame = 0;
+let lastRenderedTime = -1;
+let lastStatsFrame = 0;
+let lastPlaybackTime = 0;
+let panelHideTimer = 0;
+
+const panelHotspotSize = 150;
+const compactPanelMedia = window.matchMedia("(max-width: 860px)");
+
+video.loop = true;
 
 function parseTrackText(text, filename) {
   const trimmed = text.trim();
@@ -49,8 +64,25 @@ function colorForTrack(id, alpha = 1) {
   return `hsla(${hue}, 90%, 60%, ${alpha})`;
 }
 
-function fitRect() {
-  const bounds = video.getBoundingClientRect();
+function colorWithAlpha(color, alpha = 1) {
+  if (typeof color !== "string") return "";
+
+  const match = color.trim().match(/^#?([0-9a-f]{6})$/i);
+  if (!match) return "";
+
+  const hex = match[1];
+  const red = Number.parseInt(hex.slice(0, 2), 16);
+  const green = Number.parseInt(hex.slice(2, 4), 16);
+  const blue = Number.parseInt(hex.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function colorForObject(obj, alpha = 1) {
+  return colorWithAlpha(obj.color, alpha) || colorForTrack(obj.track_id, alpha);
+}
+
+function computeFitRect() {
+  const bounds = canvas.getBoundingClientRect();
   const videoRatio = video.videoWidth / video.videoHeight;
   const boundsRatio = bounds.width / bounds.height;
 
@@ -85,18 +117,79 @@ function fitRect() {
   };
 }
 
+function getFitRect() {
+  if (!cachedFit) cachedFit = computeFitRect();
+  return cachedFit;
+}
+
 function resizeCanvas() {
   const bounds = video.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(bounds.width * dpr));
-  canvas.height = Math.max(1, Math.floor(bounds.height * dpr));
+  const nextCssWidth = Math.max(1, Math.floor(bounds.width));
+  const nextCssHeight = Math.max(1, Math.floor(bounds.height));
+  const nextWidth = Math.max(1, Math.floor(nextCssWidth * dpr));
+  const nextHeight = Math.max(1, Math.floor(nextCssHeight * dpr));
+
+  if (
+    canvas.width === nextWidth &&
+    canvas.height === nextHeight &&
+    canvasCssWidth === nextCssWidth &&
+    canvasCssHeight === nextCssHeight
+  ) {
+    return;
+  }
+
+  canvasCssWidth = nextCssWidth;
+  canvasCssHeight = nextCssHeight;
+  canvas.width = nextWidth;
+  canvas.height = nextHeight;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cachedFit = null;
 }
 
 function inferFps() {
   if (maxFrame && video.duration && Number.isFinite(video.duration)) {
     const fps = maxFrame / video.duration;
     fpsInput.value = fps.toFixed(2);
+  }
+}
+
+function invalidateRender() {
+  lastRenderedFrame = 0;
+  lastRenderedTime = -1;
+  lastStatsFrame = 0;
+  cachedFit = null;
+}
+
+function setPanelOpen(isOpen) {
+  panel.classList.toggle("is-open", isOpen);
+}
+
+function isPointInPanel(clientX, clientY) {
+  const rect = panel.getBoundingClientRect();
+  return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+}
+
+function isPointInPanelHotspot(clientX, clientY) {
+  if (compactPanelMedia.matches) {
+    return clientY >= window.innerHeight - panelHotspotSize;
+  }
+
+  return clientX >= window.innerWidth - panelHotspotSize && clientY <= panelHotspotSize;
+}
+
+function schedulePanelClose() {
+  window.clearTimeout(panelHideTimer);
+  panelHideTimer = window.setTimeout(() => setPanelOpen(false), 140);
+}
+
+function updatePanelFromPointer(event) {
+  window.clearTimeout(panelHideTimer);
+
+  if (isPointInPanelHotspot(event.clientX, event.clientY) || isPointInPanel(event.clientX, event.clientY)) {
+    setPanelOpen(true);
+  } else {
+    schedulePanelClose();
   }
 }
 
@@ -107,9 +200,11 @@ function drawObject(obj, fit, opacity, mode) {
   const h = (obj.y2 - obj.y1) * fit.scaleY;
   const cx = fit.x + obj.center_x * fit.scaleX;
   const cy = fit.y + obj.center_y * fit.scaleY;
+  const fillColor = colorForObject(obj, opacity);
+  const solidColor = colorForObject(obj, 0.95);
 
-  ctx.fillStyle = colorForTrack(obj.track_id, opacity);
-  ctx.strokeStyle = colorForTrack(obj.track_id, 0.95);
+  ctx.fillStyle = fillColor;
+  ctx.strokeStyle = solidColor;
   ctx.lineWidth = 2;
 
   if (mode === "ellipse") {
@@ -126,39 +221,122 @@ function drawObject(obj, fit, opacity, mode) {
     ctx.strokeRect(x, y, w, h);
   }
 
-  ctx.fillStyle = "rgba(7, 8, 7, 0.82)";
-  ctx.fillRect(x, Math.max(0, y - 24), 84, 22);
-  ctx.fillStyle = "#eaff86";
-  ctx.font = "12px Segoe UI, sans-serif";
-  ctx.fillText(`${obj.class_name || "obj"} ${obj.track_id}`, x + 7, Math.max(14, y - 8));
+  const label = `${obj.class_name || "obj"} ${obj.track_id}`;
+  const labelHeight = 24;
+  const labelPaddingX = 8;
+  ctx.font = "700 12px Segoe UI, sans-serif";
+  const labelWidth = Math.ceil(ctx.measureText(label).width) + labelPaddingX * 2;
+  const labelX = Math.max(0, Math.min(cx - labelWidth / 2, canvasCssWidth - labelWidth));
+  const labelY = Math.max(0, y - labelHeight);
+
+  ctx.fillStyle = solidColor;
+  ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
+  ctx.fillStyle = "#070807";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, labelX + labelPaddingX, labelY + labelHeight / 2);
+  ctx.textBaseline = "alphabetic";
 }
 
 function render() {
   resizeCanvas();
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   const fps = Number(fpsInput.value) || 30;
   const frame = Math.max(1, Math.round(video.currentTime * fps) + 1);
+  const shouldRedraw = frame !== lastRenderedFrame || video.currentTime !== lastRenderedTime || video.paused;
+  if (!shouldRedraw) return;
+
+  ctx.clearRect(0, 0, canvasCssWidth, canvasCssHeight);
+
   const objects = tracksByFrame.get(frame) || [];
-  const fit = fitRect();
+  const fit = getFitRect();
   const opacity = Number(opacityInput.value);
   const mode = modeInput.value;
 
   for (const obj of objects) drawObject(obj, fit, opacity, mode);
 
-  frameStat.textContent = String(frame);
-  objectStat.textContent = String(objects.length);
-  trackStat.textContent = String(new Set(objects.map((obj) => obj.track_id)).size);
+  if (frame !== lastStatsFrame) {
+    frameStat.textContent = String(frame);
+    objectStat.textContent = String(objects.length);
+    trackStat.textContent = String(new Set(objects.map((obj) => obj.track_id)).size);
+    lastStatsFrame = frame;
+  }
 
-  rafId = requestAnimationFrame(render);
+  lastRenderedFrame = frame;
+  lastRenderedTime = video.currentTime;
+}
+
+function renderLoop() {
+  render();
+  rafId = requestAnimationFrame(renderLoop);
+}
+
+function renderVideoFrame() {
+  render();
+  if (!video.paused && !video.ended) {
+    videoFrameCallbackId = video.requestVideoFrameCallback(renderVideoFrame);
+  }
+}
+
+function startRendering() {
+  stopRendering();
+  if ("requestVideoFrameCallback" in video) {
+    videoFrameCallbackId = video.requestVideoFrameCallback(renderVideoFrame);
+  } else {
+    rafId = requestAnimationFrame(renderLoop);
+  }
+}
+
+function stopRendering() {
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+  if (videoFrameCallbackId && "cancelVideoFrameCallback" in video) {
+    video.cancelVideoFrameCallback(videoFrameCallbackId);
+    videoFrameCallbackId = 0;
+  }
+}
+
+function waitForVideoMetadata() {
+  if (!video.src || video.readyState >= 1) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    video.addEventListener("loadedmetadata", resolve, { once: true });
+  });
+}
+
+async function playFromStart() {
+  if (!video.src) {
+    invalidateRender();
+    render();
+    return;
+  }
+
+  stopRendering();
+  await waitForVideoMetadata();
+  video.currentTime = 0;
+  invalidateRender();
+  render();
+
+  await video
+    .play()
+    .then(() => {
+      startRendering();
+    })
+    .catch((error) => {
+      console.error("Video playback failed:", error);
+      playToggle.textContent = "Play";
+    });
 }
 
 async function loadVideo(file) {
+  if (video.src) URL.revokeObjectURL(video.src);
+  stopRendering();
   video.src = URL.createObjectURL(file);
   videoName.textContent = file.name;
   dropLayer.classList.add("is-hidden");
-  video.pause();
-  playToggle.textContent = "Play";
+  invalidateRender();
+  render();
 }
 
 async function loadTracks(file) {
@@ -166,14 +344,26 @@ async function loadTracks(file) {
   tracksByFrame = parseTrackText(text, file.name);
   tracksName.textContent = file.name;
   inferFps();
+  invalidateRender();
+  render();
 }
 
-function handleFiles(files) {
+async function handleFiles(files) {
+  let hasUpload = false;
+
   for (const file of files) {
     const lower = file.name.toLowerCase();
-    if (file.type.startsWith("video/") || lower.endsWith(".mp4")) loadVideo(file);
-    if (lower.endsWith(".jsonl") || lower.endsWith(".json")) loadTracks(file);
+    if (file.type.startsWith("video/") || lower.endsWith(".mp4")) {
+      hasUpload = true;
+      await loadVideo(file);
+    }
+    if (lower.endsWith(".jsonl") || lower.endsWith(".json")) {
+      hasUpload = true;
+      await loadTracks(file);
+    }
   }
+
+  if (hasUpload) await playFromStart();
 }
 
 videoInput.addEventListener("change", (event) => handleFiles(event.target.files));
@@ -188,15 +378,48 @@ playToggle.addEventListener("click", async () => {
     video.pause();
   }
 });
+fpsInput.addEventListener("input", () => {
+  invalidateRender();
+  render();
+});
+opacityInput.addEventListener("input", () => {
+  invalidateRender();
+  render();
+});
+modeInput.addEventListener("change", () => {
+  invalidateRender();
+  render();
+});
 video.addEventListener("play", () => {
   playToggle.textContent = "Pause";
+  startRendering();
 });
 video.addEventListener("pause", () => {
   playToggle.textContent = "Play";
+  stopRendering();
+  render();
 });
 video.addEventListener("loadedmetadata", () => {
   resizeCanvas();
   inferFps();
+  invalidateRender();
+  render();
+});
+video.addEventListener("seeking", () => {
+  invalidateRender();
+  render();
+});
+video.addEventListener("seeked", () => {
+  invalidateRender();
+  render();
+  if (!video.paused) startRendering();
+});
+video.addEventListener("timeupdate", () => {
+  if (video.currentTime < lastPlaybackTime) {
+    invalidateRender();
+    render();
+  }
+  lastPlaybackTime = video.currentTime;
 });
 
 for (const eventName of ["dragenter", "dragover"]) {
@@ -214,7 +437,20 @@ for (const eventName of ["dragleave", "drop"]) {
 }
 
 window.addEventListener("drop", (event) => handleFiles(event.dataTransfer.files));
-window.addEventListener("resize", resizeCanvas);
+window.addEventListener("pointermove", updatePanelFromPointer);
+window.addEventListener("pointerleave", schedulePanelClose);
+compactPanelMedia.addEventListener("change", () => setPanelOpen(false));
+panel.addEventListener("pointerenter", () => {
+  window.clearTimeout(panelHideTimer);
+  setPanelOpen(true);
+});
+panel.addEventListener("pointerleave", schedulePanelClose);
+panel.addEventListener("focusin", () => setPanelOpen(true));
+panel.addEventListener("focusout", schedulePanelClose);
+window.addEventListener("resize", () => {
+  resizeCanvas();
+  invalidateRender();
+  render();
+});
 
-cancelAnimationFrame(rafId);
 render();

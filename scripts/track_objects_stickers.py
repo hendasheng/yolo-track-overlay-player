@@ -86,6 +86,11 @@ def color_for_id(track_id):
     )
 
 
+def bgr_to_hex(color):
+    blue, green, red = [int(v) for v in color]
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
 def safe_name(value):
     return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in value)
 
@@ -211,6 +216,7 @@ def main():
         "class_id",
         "class_name",
         "confidence",
+        "color",
         "x1",
         "y1",
         "x2",
@@ -244,6 +250,7 @@ def main():
                     cx = (x1 + x2) / 2
                     cy = (y1 + y2) / 2
                     color = color_for_id(track_id)
+                    color_hex = bgr_to_hex(color)
                     object_name = model.names.get(int(cls), str(cls))
                     draw_sticker(frame, track_id, object_name, box, color)
 
@@ -253,6 +260,7 @@ def main():
                         "class_id": int(cls),
                         "class_name": object_name,
                         "confidence": round(float(conf), 4),
+                        "color": color_hex,
                         "x1": round(x1, 2),
                         "y1": round(y1, 2),
                         "x2": round(x2, 2),
