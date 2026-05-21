@@ -9,8 +9,6 @@
 3. 输出 `CSV / JSONL` 数据，方便后续前端、MIDI、TouchDesigner 或其他视觉系统使用。
 4. 用前端播放器加载原视频和检测数据，验证图形叠加是否准确。
 
-AI / Codex 交接说明已拆到 [AI_CONTEXT.md](./AI_CONTEXT.md)。
-
 ## 目录结构
 
 ```text
@@ -19,13 +17,13 @@ yolo-track-overlay-player/
   runs/                      每次运行生成的结果
   web_track_overlay_player/  前端跟踪数据叠加播放器
   scripts/track_objects_stickers.py  YOLO 跟踪、贴纸、数据导出脚本
-  README.md                  给人看的使用说明
+  README.md                  项目说明与使用文档
   AI_CONTEXT.md              给 AI / Codex 的技术上下文
 ```
 
 ## 推荐环境
 
-建议按用途建立两个本地环境。它们是本机生成目录，不应该提交到 Git。
+建议按用途选择 CPU 或 GPU 环境。
 
 ```text
 yolo-cpu-env
@@ -37,7 +35,134 @@ yolo-gpu-env
 
 CPU 环境建议用普通 `venv`。GPU 环境建议用 `conda` 创建 Python 3.11，再安装 CUDA 版 PyTorch。
 
+## 安装
+
+### Windows CPU
+
+适合没有 NVIDIA 显卡，或者只是先验证流程的电脑。
+
+前提：
+
+```text
+Python 3.10 - 3.13
+PowerShell
+```
+
+在项目根目录打开 PowerShell，创建环境：
+
+```powershell
+python -m venv yolo-cpu-env
+```
+
+激活环境：
+
+```powershell
+.\yolo-cpu-env\Scripts\Activate.ps1
+```
+
+如果 PowerShell 拦截激活脚本：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\yolo-cpu-env\Scripts\Activate.ps1
+```
+
+安装依赖：
+
+```powershell
+pip install -r requirements-cpu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+验证：
+
+```powershell
+python -c "from ultralytics import YOLO; import cv2; import torch; print('ok'); print(torch.cuda.is_available())"
+```
+
+CPU 环境看到 `False` 是正常的。
+
+### Windows NVIDIA GPU
+
+适合 NVIDIA CUDA 显卡。推荐用 conda 创建 Python 3.11 环境，避免 CUDA 版 PyTorch 和 Python 版本不匹配。
+
+前提：
+
+```text
+Miniconda 或 Anaconda
+NVIDIA 显卡驱动已安装
+```
+
+在项目根目录打开 PowerShell，创建环境：
+
+```powershell
+conda create -p .\yolo-gpu-env python=3.11 -y
+```
+
+激活环境：
+
+```powershell
+conda activate .\yolo-gpu-env
+```
+
+安装 CUDA 版 PyTorch。国内网络可用阿里 PyTorch wheel，同时用清华 PyPI 补普通依赖：
+
+```powershell
+pip install -r requirements-gpu-cu121.txt -f https://mirrors.aliyun.com/pytorch-wheels/cu121/ -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+安装 Ultralytics 和跟踪依赖：
+
+```powershell
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+验证 GPU：
+
+```powershell
+python -c "from ultralytics import YOLO; import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU only')"
+```
+
+如果输出 `True` 和显卡名称，GPU 环境可用。
+
+### macOS
+
+macOS 默认按 CPU 环境使用。Intel Mac 没有 CUDA，Apple Silicon 的 `mps` 后端兼容性不如 CUDA 稳定，不作为默认安装方式。
+
+在项目根目录打开终端，创建环境：
+
+```bash
+python3 -m venv yolo-cpu-env
+```
+
+激活：
+
+```bash
+source yolo-cpu-env/bin/activate
+```
+
+安装：
+
+```bash
+pip install -r requirements.txt
+```
+
+验证：
+
+```bash
+python -c "from ultralytics import YOLO; import cv2; import torch; print('ok'); print(torch.cuda.is_available())"
+```
+
+Apple Silicon 用户可以自行尝试 `mps`：
+
+```bash
+python -c "import torch; print(torch.backends.mps.is_available() if hasattr(torch.backends, 'mps') else False)"
+```
+
+如果 `mps` 可用，也建议先按 CPU 路线完成安装和验证。后续运行时再按需要尝试 `--device mps`。
+
 ## 使用
+
+本章中的检测命令都需要先激活对应的 CPU 或 GPU 环境。
 
 ### CPU
 
@@ -60,12 +185,6 @@ python scripts\track_objects_stickers.py
 - 检测 `car`
 - 使用 `conf=0.15`
 - 输出到 `runs/`
-
-退出 CPU 环境：
-
-```powershell
-deactivate
-```
 
 ### GPU
 
@@ -100,12 +219,6 @@ python scripts\track_objects_stickers.py --device 0
 
 ```powershell
 python scripts\track_objects_stickers.py --model yolo11m.pt --classes person --device 0
-```
-
-退出 GPU 环境：
-
-```powershell
-conda deactivate
 ```
 
 ### 放入待检测视频
@@ -220,6 +333,20 @@ n -> s -> m -> l -> x
 
 CPU 环境建议用 `n / s`。GPU 环境可以尝试 `m / l / x`。
 
+### 退出环境
+
+退出 CPU 环境：
+
+```powershell
+deactivate
+```
+
+退出 GPU 环境：
+
+```powershell
+conda deactivate
+```
+
 ### 输出结果在哪里
 
 每次运行都会在 `runs/` 下新建文件夹。
@@ -314,199 +441,6 @@ http://127.0.0.1:8090
 - 视频比例不变，多余部分裁切
 - canvas 使用同样的 cover 映射
 - 因此检测框会跟随视频缩放和裁切
-
-## 安装
-
-### Windows CPU
-
-适合没有 NVIDIA 显卡，或者只是先验证流程的电脑。
-
-前提：
-
-```text
-Python 3.10 - 3.13
-PowerShell
-```
-
-在项目根目录打开 PowerShell，创建环境：
-
-```powershell
-python -m venv yolo-cpu-env
-```
-
-激活环境：
-
-```powershell
-.\yolo-cpu-env\Scripts\Activate.ps1
-```
-
-如果 PowerShell 拦截激活脚本：
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\yolo-cpu-env\Scripts\Activate.ps1
-```
-
-安装依赖：
-
-```powershell
-pip install -r requirements-cpu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-验证：
-
-```powershell
-python -c "from ultralytics import YOLO; import cv2; import torch; print('ok'); print(torch.cuda.is_available())"
-```
-
-CPU 环境看到 `False` 是正常的。
-
-### Windows NVIDIA GPU
-
-适合 NVIDIA CUDA 显卡。推荐用 conda 创建 Python 3.11 环境，避免 CUDA 版 PyTorch 和 Python 版本不匹配。
-
-前提：
-
-```text
-Miniconda 或 Anaconda
-NVIDIA 显卡驱动已安装
-```
-
-创建环境：
-
-```powershell
-conda create -p .\yolo-gpu-env python=3.11 -y
-```
-
-激活环境：
-
-```powershell
-conda activate .\yolo-gpu-env
-```
-
-安装 CUDA 版 PyTorch。国内网络可用阿里 PyTorch wheel，同时用清华 PyPI 补普通依赖：
-
-```powershell
-pip install -r requirements-gpu-cu121.txt -f https://mirrors.aliyun.com/pytorch-wheels/cu121/ -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-安装 Ultralytics 和跟踪依赖：
-
-```powershell
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-验证 GPU：
-
-```powershell
-python -c "from ultralytics import YOLO; import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU only')"
-```
-
-如果输出 `True` 和显卡名称，GPU 环境可用。
-
-GPU 运行示例：
-
-```powershell
-python scripts\track_objects_stickers.py --model yolo11m.pt --classes person --device 0
-```
-
-### macOS Intel
-
-Intel Mac 没有 CUDA，也没有 Apple Silicon 的 `mps`，按 CPU 环境使用。
-
-创建环境：
-
-```bash
-python3 -m venv yolo-cpu-env
-```
-
-激活：
-
-```bash
-source yolo-cpu-env/bin/activate
-```
-
-安装：
-
-```bash
-pip install -r requirements.txt
-```
-
-验证：
-
-```bash
-python -c "from ultralytics import YOLO; import cv2; import torch; print('ok'); print(torch.cuda.is_available())"
-```
-
-运行：
-
-```bash
-python scripts\track_objects_stickers.py --classes person --device cpu
-```
-
-### macOS Apple Silicon
-
-Apple Silicon 没有 CUDA，但可以尝试 PyTorch 的 `mps` 后端。`mps` 通常比 CPU 快，但兼容性和速度要按实际视频测试。
-
-创建环境：
-
-```bash
-python3 -m venv yolo-mps-env
-```
-
-激活：
-
-```bash
-source yolo-mps-env/bin/activate
-```
-
-安装：
-
-```bash
-pip install -r requirements.txt
-```
-
-验证 `mps`：
-
-```bash
-python -c "import torch; print(torch.backends.mps.is_available() if hasattr(torch.backends, 'mps') else False)"
-```
-
-使用 `mps`：
-
-```bash
-python scripts\track_objects_stickers.py --classes person --device mps
-```
-
-如果 `mps` 报错或表现不稳定，改用 CPU：
-
-```bash
-python scripts\track_objects_stickers.py --classes person --device cpu
-```
-
-### 前端播放器启动
-
-前端不需要构建工具，只需要本地 HTTP 服务。
-
-Windows：
-
-```powershell
-cd web_track_overlay_player
-..\yolo-cpu-env\Scripts\python.exe -m http.server 8090 --bind 127.0.0.1
-```
-
-macOS：
-
-```bash
-cd web_track_overlay_player
-../yolo-cpu-env/bin/python -m http.server 8090 --bind 127.0.0.1
-```
-
-打开：
-
-```text
-http://127.0.0.1:8090
-```
 
 ## 常见问题
 
