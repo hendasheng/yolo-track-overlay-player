@@ -166,65 +166,55 @@ python scripts\live_track_server.py
 http://127.0.0.1:8765
 ```
 
-页面左上角会显示可打开的摄像头，点击即可切换；检测类别也在页面里切换。Windows 会优先显示 DirectShow 设备名，macOS 会优先显示 AVFoundation 设备名；没有 FFmpeg 时会退回数字 source。
+当前实时页面使用浏览器原生摄像头预览，不再通过 Python 重新编码视频。页面左上角可以选择摄像头和检测类别。
+
+`Detection` 开关默认关闭。关闭时只播放摄像头；打开后，浏览器会从当前 cover 视口里截取实际可见区域，缩放后发送给 Python 检测，再把返回的框按视口坐标叠加到本地视频上。
+
+这个架构的目标是让视频播放和 YOLO 检测解耦：视频由浏览器直接播放，检测慢时只影响框更新频率，不应该拖慢视频播放。
+
+页面右上角：
+
+```text
+Size    摄像头实际采集分辨率
+FPS     检测请求返回频率，不是视频播放帧率
+Detect  单次后端检测耗时
+```
 
 常用启动方式：
 
 ```powershell
 python scripts\live_track_server.py
 python scripts\live_track_server.py --device 0
-python scripts\live_track_server.py --model yolo26n.pt --device 0 --imgsz 640
+python scripts\live_track_server.py --model yolo26n.pt --device 0 --imgsz 480
 ```
 
-实时页面会用 cover 样式铺满窗口，检测框会按同样的裁切和缩放映射。拖拽改变窗口尺寸时，视频和 overlay 会跟着重新适配。页面右上角的 `Size` 会显示当前实际采集分辨率。
+检测压力主要由两个参数控制：
 
-默认会用 `--resolution-mode balanced`，目标是 720p 左右的像素量，避免在低清和超高清卡顿之间来回跳。这里不是强行限制 16:9 比例；脚本会尝试 16:9、4:3 等常见档位，并按摄像头实际返回的宽高显示和映射检测框。MJPEG 会用较高 JPEG 质量输出到浏览器。
-
-如果要更流畅：
-
-```powershell
-python scripts\live_track_server.py --resolution-mode speed
+```text
+--detect-width  浏览器发给后端的检测图宽度，默认 480
+--imgsz         YOLO 推理尺寸，越小越快
 ```
 
-如果要更清晰，但最高只自动尝试到 1080p：
+如果框更新明显滞后，优先降低检测图宽度和推理尺寸：
 
 ```powershell
-python scripts\live_track_server.py --resolution-mode quality
+python scripts\live_track_server.py --detect-width 416 --imgsz 416
 ```
 
-如果要固定请求 1080p：
+如果要更准一些：
 
 ```powershell
-python scripts\live_track_server.py --width 1920 --height 1080 --jpeg-quality 95
-```
-
-如果要完全保留摄像头默认输出，不做自动高清探测：
-
-```powershell
-python scripts\live_track_server.py --no-auto-resolution
-```
-
-如果画面变流畅但推理跟不上，可以保持摄像头 1080p，同时用较小推理尺寸：
-
-```powershell
-python scripts\live_track_server.py --width 1920 --height 1080 --jpeg-quality 95 --imgsz 640
-```
-
-网络摄像头或视频流：
-
-```powershell
-python scripts\live_track_server.py --source rtsp://user:pass@camera-ip/stream --device 0
+python scripts\live_track_server.py --detect-width 640 --imgsz 640
 ```
 
 实时接口：
 
 ```text
 /             实时预览页面
-/video        MJPEG 视频流
-/events       Server-Sent Events，每帧一条 JSON
-/latest.json  最新一帧 JSON
 /classes      当前类别和可选类别
 /set-classes  更新检测类别
+/detect-frame 浏览器抽帧检测接口
+/config       前端读取检测参数
 ```
 
 性能建议：
@@ -232,21 +222,8 @@ python scripts\live_track_server.py --source rtsp://user:pass@camera-ip/stream -
 1. NVIDIA 显卡优先使用 `--device 0`。
 2. 先用 `yolo11n.pt` 或 `yolo26n.pt`，稳定后再换 `s / m`。
 3. 在页面里只选择需要的类别。
-4. 用 `--imgsz 512` 或 `--imgsz 640` 控制速度和精度。
-5. 推理跟不上摄像头时，用 `--max-fps 15` 或 `--max-fps 20` 限制处理帧率。
-
-摄像头排查：
-
-```powershell
-python scripts\live_track_server.py --probe-cameras 6 --backend dshow
-python scripts\live_track_server.py --probe-cameras 6 --backend msmf
-```
-
-macOS：
-
-```bash
-python scripts/live_track_server.py --probe-cameras 6 --backend avfoundation
-```
+4. 用 `--detect-width` 和 `--imgsz` 控制检测速度和精度。
+5. 页面右上角 `Detect` 如果经常超过 200ms，优先降低 `--detect-width` 或 `--imgsz`。
 
 ## 输出结果
 

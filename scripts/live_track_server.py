@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import cv2
+import numpy as np
 from ultralytics import YOLO
 
 from track_objects_stickers import (
@@ -43,13 +44,14 @@ HTML_PAGE = """<!doctype html>
         inset: 0;
         background: #080a09;
       }
-      #stream, #overlay {
+      #browserPreview, #overlay {
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
         object-fit: cover;
       }
+      #browserPreview { background: #050706; }
       #overlay { pointer-events: none; }
       .hud {
         position: fixed;
@@ -130,13 +132,25 @@ HTML_PAGE = """<!doctype html>
         color: #c2ccc7;
         font-size: 12px;
       }
+      .switch-field {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-height: 34px;
+      }
+      .switch-field input {
+        width: 18px;
+        height: 18px;
+        accent-color: #88c7ff;
+      }
       @media (max-width: 700px) {
         .hud {
           left: 10px;
           right: 10px;
           top: auto;
           bottom: 10px;
-          grid-template-columns: repeat(4, 1fr);
+          grid-template-columns: repeat(5, 1fr);
         }
         .hud div {
           display: grid;
@@ -147,7 +161,7 @@ HTML_PAGE = """<!doctype html>
   </head>
   <body>
     <main class="stage">
-      <img id="stream" src="/video" alt="Live camera stream" />
+      <video id="browserPreview" autoplay muted playsinline></video>
       <canvas id="overlay"></canvas>
     </main>
     <section class="control-panel">
@@ -163,6 +177,10 @@ HTML_PAGE = """<!doctype html>
         Class
         <select id="classSelect"></select>
       </label>
+      <label class="field switch-field">
+        <span>Detection</span>
+        <input id="detectionToggle" type="checkbox" />
+      </label>
       <label id="customClassWrap" class="field" hidden>
         Custom classes
         <input id="customClassInput" type="text" value="person" />
@@ -173,20 +191,23 @@ HTML_PAGE = """<!doctype html>
       <div><span>Frame</span><strong id="frameStat">-</strong></div>
       <div><span>Objects</span><strong id="objectStat">-</strong></div>
       <div><span>FPS</span><strong id="fpsStat">-</strong></div>
+      <div><span>Detect</span><strong id="detectStat">-</strong></div>
       <div><span>Size</span><strong id="sizeStat">-</strong></div>
     </aside>
     <script>
-      const img = document.querySelector("#stream");
+      const browserPreview = document.querySelector("#browserPreview");
       const canvas = document.querySelector("#overlay");
       const ctx = canvas.getContext("2d");
       const frameStat = document.querySelector("#frameStat");
       const objectStat = document.querySelector("#objectStat");
       const fpsStat = document.querySelector("#fpsStat");
+      const detectStat = document.querySelector("#detectStat");
       const sizeStat = document.querySelector("#sizeStat");
       const status = document.querySelector("#status");
       const cameraSelect = document.querySelector("#cameraSelect");
       const cameraDetail = document.querySelector("#cameraDetail");
       const classSelect = document.querySelector("#classSelect");
+      const detectionToggle = document.querySelector("#detectionToggle");
       const customClassWrap = document.querySelector("#customClassWrap");
       const customClassInput = document.querySelector("#customClassInput");
       let latest = { width: 1, height: 1, objects: [] };
@@ -194,6 +215,22 @@ HTML_PAGE = """<!doctype html>
       let streamNaturalHeight = 1;
       let pendingCameraValue = "";
       let currentCameraValue = "";
+      let browserStream = null;
+      let detectionTimer = 0;
+      let detecting = false;
+      let detectFrame = 0;
+      let detectStarted = 0;
+      let latestDetectionAt = 0;
+      let configPromise = null;
+      const detectCanvas = document.createElement("canvas");
+      const detectCtx = detectCanvas.getContext("2d");
+
+      async function getConfig() {
+        if (!configPromise) {
+          configPromise = fetch("/config").then((response) => response.json()).catch(() => ({ detect_width: 480 }));
+        }
+        return configPromise;
+      }
 
       function resizeCanvas() {
         const dpr = window.devicePixelRatio || 1;
@@ -236,6 +273,14 @@ HTML_PAGE = """<!doctype html>
       function draw() {
         const size = resizeCanvas();
         ctx.clearRect(0, 0, size.w, size.h);
+        if (latest.viewport_space) {
+          const age = latestDetectionAt ? performance.now() - latestDetectionAt : 0;
+          if (age <= 220) {
+            for (const obj of latest.objects || []) drawViewportObject(obj, size.w, size.h);
+          }
+          requestAnimationFrame(draw);
+          return;
+        }
         const sourceW = latest.width || streamNaturalWidth || 1;
         const sourceH = latest.height || streamNaturalHeight || 1;
         const fit = fitRect(size.w, size.h, sourceW, sourceH);
@@ -268,31 +313,43 @@ HTML_PAGE = """<!doctype html>
         requestAnimationFrame(draw);
       }
 
-      const events = new EventSource("/events");
-      events.onmessage = (event) => {
-        latest = JSON.parse(event.data);
-        if (latest.status) {
-          status.textContent = latest.status;
-          status.classList.remove("is-hidden");
-        } else {
-          status.classList.add("is-hidden");
-        }
-        frameStat.textContent = latest.frame || "-";
-        objectStat.textContent = (latest.objects || []).length;
-        fpsStat.textContent = latest.process_fps ? latest.process_fps.toFixed(1) : "-";
-        sizeStat.textContent = latest.width && latest.height ? `${latest.width}x${latest.height}` : "-";
-      };
-      events.onerror = () => {
-        status.textContent = "Waiting for live tracking server...";
-        status.classList.remove("is-hidden");
-      };
-      img.onload = () => {
-        streamNaturalWidth = img.naturalWidth || streamNaturalWidth;
-        streamNaturalHeight = img.naturalHeight || streamNaturalHeight;
+      function drawViewportObject(obj, viewportW, viewportH) {
+        const x = obj.x1;
+        const y = obj.y1;
+        const w = obj.x2 - obj.x1;
+        const h = obj.y2 - obj.y1;
+        const color = colorWithAlpha(obj.color, 0.95);
+        const fill = colorWithAlpha(obj.color, 0.2);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = fill;
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeRect(x, y, w, h);
+
+        const label = `${obj.class_name || "obj"} ${obj.track_id}`;
+        ctx.font = "700 13px Segoe UI, sans-serif";
+        const labelW = Math.ceil(ctx.measureText(label).width) + 14;
+        const labelH = 24;
+        const labelX = Math.max(0, Math.min(x, viewportW - labelW));
+        const labelY = Math.max(0, y - labelH);
+        ctx.fillStyle = color;
+        ctx.fillRect(labelX, labelY, labelW, labelH);
+        ctx.fillStyle = "#050706";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, labelX + 7, labelY + labelH / 2);
+      }
+
+      browserPreview.onloadedmetadata = () => {
+        streamNaturalWidth = browserPreview.videoWidth || streamNaturalWidth;
+        streamNaturalHeight = browserPreview.videoHeight || streamNaturalHeight;
+        latest.width = streamNaturalWidth;
+        latest.height = streamNaturalHeight;
+        sizeStat.textContent = `${streamNaturalWidth}x${streamNaturalHeight}`;
       };
       window.addEventListener("resize", () => {
         resizeCanvas();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (latest.viewport_space) latest.objects = [];
       });
       async function refreshCameras() {
         const previousValue = pendingCameraValue || currentCameraValue || cameraSelect.value;
@@ -303,28 +360,23 @@ HTML_PAGE = """<!doctype html>
         cameraSelect.appendChild(loading);
         cameraDetail.textContent = "Scanning camera devices...";
         try {
-          const response = await fetch("/cameras");
-          const data = await response.json();
-          const current = data.current || null;
-          currentCameraValue = current ? `${current.source}|${current.backend}` : "";
+          let devices = await navigator.mediaDevices.enumerateDevices();
+          if (!devices.some((device) => device.kind === "videoinput" && device.label)) {
+            const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            for (const track of permissionStream.getTracks()) track.stop();
+            devices = await navigator.mediaDevices.enumerateDevices();
+          }
+          const cameras = devices.filter((device) => device.kind === "videoinput");
           cameraSelect.innerHTML = "";
           const placeholder = document.createElement("option");
           placeholder.textContent = "Choose camera";
-          placeholder.value = "none|any";
+          placeholder.value = "";
           cameraSelect.appendChild(placeholder);
-          for (const camera of data.cameras || []) {
-            const meta = [];
-            meta.push(`source ${camera.source}`);
-            if (camera.width) meta.push(`${camera.width}x${camera.height}`);
-            if (typeof camera.brightness === "number" && camera.width) {
-              meta.push(`brightness ${camera.brightness.toFixed(1)}`);
-            }
-            meta.push(camera.status);
-            const detail = meta.join(" · ");
+          for (const camera of cameras) {
             const option = document.createElement("option");
-            option.value = `${camera.source}|${camera.backend}`;
-            option.textContent = camera.name || `Camera ${camera.source}`;
-            option.dataset.detail = `Source ${camera.source} · ${camera.backend} · ${detail}`;
+            option.value = camera.deviceId;
+            option.textContent = camera.label || `Camera ${cameraSelect.options.length}`;
+            option.dataset.detail = option.textContent;
             cameraSelect.appendChild(option);
           }
           const targetValue = previousValue || currentCameraValue;
@@ -337,8 +389,7 @@ HTML_PAGE = """<!doctype html>
           }
           if (!cameraSelect.value) {
             if (cameraSelect.options.length === 1) cameraDetail.textContent = "No camera found.";
-            else cameraDetail.textContent = "Choose a camera source.";
-            cameraSelect.value = "none|any";
+            else cameraDetail.textContent = "Choose a camera.";
           }
         } catch (error) {
           cameraSelect.innerHTML = "";
@@ -346,20 +397,35 @@ HTML_PAGE = """<!doctype html>
         }
       }
       cameraSelect.onchange = async () => {
-        const [source, backend] = cameraSelect.value.split("|");
+        const deviceId = cameraSelect.value;
         const selected = cameraSelect.selectedOptions[0];
         pendingCameraValue = cameraSelect.value;
         cameraDetail.textContent = selected?.dataset.detail || "";
-        status.textContent = source === "none"
-          ? "Stopping camera..."
-          : `Switching to ${selected?.textContent || "camera"}...`;
+        status.textContent = `Switching to ${selected?.textContent || "camera"}...`;
         status.classList.remove("is-hidden");
-        const response = await fetch(`/select-camera?source=${source}&backend=${backend}`);
-        const data = await response.json();
-        if (data.ok) {
-          currentCameraValue = `${data.source}|${data.backend}`;
-        }
+        await startBrowserCamera(deviceId);
+        currentCameraValue = deviceId;
       };
+      function stopBrowserCamera() {
+        if (browserStream) {
+          for (const track of browserStream.getTracks()) track.stop();
+          browserStream = null;
+        }
+        browserPreview.srcObject = null;
+      }
+      async function startBrowserCamera(deviceId) {
+        stopBrowserCamera();
+        const constraints = {
+          video: deviceId
+            ? { deviceId: { exact: deviceId } }
+            : { width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        };
+        browserStream = await navigator.mediaDevices.getUserMedia(constraints);
+        browserPreview.srcObject = browserStream;
+        await browserPreview.play();
+        status.classList.add("is-hidden");
+      }
       function currentClasses() {
         return classSelect.value === "custom" ? customClassInput.value : classSelect.value;
       }
@@ -404,6 +470,82 @@ HTML_PAGE = """<!doctype html>
         await fetch(`/set-classes?classes=${encodeURIComponent(classes)}`);
       }
       classSelect.onchange = updateClasses;
+      detectionToggle.onchange = async () => {
+        if (detectionToggle.checked) startDetectionLoop();
+        else stopDetectionLoop();
+      };
+      function startDetectionLoop() {
+        if (detectionTimer) return;
+        detectStarted = performance.now();
+        latestDetectionAt = 0;
+        status.textContent = "Detection on";
+        status.classList.remove("is-hidden");
+        detectionTimer = window.setInterval(sendDetectionFrame, 80);
+      }
+      function stopDetectionLoop() {
+        window.clearInterval(detectionTimer);
+        detectionTimer = 0;
+        detecting = false;
+        latest.objects = [];
+        latestDetectionAt = 0;
+        objectStat.textContent = "0";
+        fpsStat.textContent = "-";
+        detectStat.textContent = "-";
+        status.textContent = "Detection off";
+        status.classList.remove("is-hidden");
+      }
+      async function sendDetectionFrame() {
+        if (detecting || !browserPreview.videoWidth || browserPreview.readyState < 2) return;
+        detecting = true;
+        try {
+          const viewport = canvas.getBoundingClientRect();
+          const viewportWidth = Math.max(1, Math.floor(viewport.width));
+          const viewportHeight = Math.max(1, Math.floor(viewport.height));
+          const videoWidth = browserPreview.videoWidth;
+          const videoHeight = browserPreview.videoHeight;
+          const viewportRatio = viewportWidth / viewportHeight;
+          const videoRatio = videoWidth / videoHeight;
+          let sx = 0;
+          let sy = 0;
+          let sw = videoWidth;
+          let sh = videoHeight;
+          if (viewportRatio > videoRatio) {
+            sh = videoWidth / viewportRatio;
+            sy = (videoHeight - sh) / 2;
+          } else {
+            sw = videoHeight * viewportRatio;
+            sx = (videoWidth - sw) / 2;
+          }
+          const config = await getConfig();
+          const detectWidth = Math.min(config.detect_width || 480, viewportWidth);
+          const detectHeight = Math.max(1, Math.round(viewportHeight * (detectWidth / viewportWidth)));
+          detectCanvas.width = detectWidth;
+          detectCanvas.height = detectHeight;
+          detectCtx.drawImage(browserPreview, sx, sy, sw, sh, 0, 0, detectWidth, detectHeight);
+          const blob = await new Promise((resolve) => detectCanvas.toBlob(resolve, "image/jpeg", 0.8));
+          if (!blob) return;
+          const response = await fetch(`/detect-frame?frame=${++detectFrame}&source_width=${viewportWidth}&source_height=${viewportHeight}`, {
+            method: "POST",
+            headers: { "Content-Type": "image/jpeg" },
+            body: blob,
+          });
+          const data = await response.json();
+          latest = data;
+          latestDetectionAt = performance.now();
+          frameStat.textContent = data.frame || "-";
+          objectStat.textContent = (data.objects || []).length;
+          const elapsed = Math.max((performance.now() - detectStarted) / 1000, 0.001);
+          fpsStat.textContent = (detectFrame / elapsed).toFixed(1);
+          sizeStat.textContent = data.width && data.height ? `${data.width}x${data.height}` : "-";
+          detectStat.textContent = data.detect_ms ? `${data.detect_ms}ms` : "-";
+          status.classList.add("is-hidden");
+        } catch (error) {
+          status.textContent = "Detection request failed.";
+          status.classList.remove("is-hidden");
+        } finally {
+          detecting = false;
+        }
+      }
       customClassInput.onchange = updateClasses;
       customClassInput.onkeydown = (event) => {
         if (event.key === "Enter") updateClasses();
@@ -428,6 +570,17 @@ class LiveState:
         self.current_camera = None
         self.classes_text = "person"
         self.class_ids = parse_classes("person")
+        self.detection_enabled = False
+        self.video_clients = 0
+        self.detect_condition = threading.Condition()
+        self.detect_frame = None
+        self.detect_frame_index = 0
+        self.detect_size = (0, 0)
+        self.detect_seq = 0
+        self.latest_records = []
+        self.inference_count = 0
+        self.http_model = None
+        self.http_model_lock = threading.Lock()
 
     def publish(self, jpeg, payload):
         with self.condition:
@@ -501,6 +654,73 @@ class LiveState:
     def get_class_ids(self):
         with self.condition:
             return list(self.class_ids)
+
+    def set_detection_enabled(self, enabled):
+        with self.condition:
+            self.detection_enabled = bool(enabled)
+            self.payload = {
+                "frame": 0,
+                "timestamp": time.time(),
+                "width": 1,
+                "height": 1,
+                "process_fps": 0,
+                "status": "Detection on" if enabled else "Detection off",
+                "objects": [],
+            }
+            self.seq += 1
+            self.condition.notify_all()
+
+    def is_detection_enabled(self):
+        with self.condition:
+            return self.detection_enabled
+
+    def add_video_client(self):
+        with self.condition:
+            self.video_clients += 1
+
+    def remove_video_client(self):
+        with self.condition:
+            self.video_clients = max(0, self.video_clients - 1)
+
+    def has_video_clients(self):
+        with self.condition:
+            return self.video_clients > 0
+
+    def submit_detection_frame(self, frame, frame_index, width, height):
+        with self.detect_condition:
+            self.detect_frame = frame
+            self.detect_frame_index = frame_index
+            self.detect_size = (width, height)
+            self.detect_seq += 1
+            self.detect_condition.notify()
+
+    def wait_detection_frame(self, last_seq, timeout=0.2):
+        with self.detect_condition:
+            self.detect_condition.wait_for(
+                lambda: self.detect_seq != last_seq or self.stop_event.is_set(),
+                timeout=timeout,
+            )
+            if self.stop_event.is_set() or self.detect_seq == last_seq or self.detect_frame is None:
+                return None
+            return (
+                self.detect_seq,
+                self.detect_frame,
+                self.detect_frame_index,
+                self.detect_size,
+            )
+
+    def set_latest_records(self, records):
+        with self.condition:
+            self.latest_records = records
+            self.inference_count += 1
+
+    def get_latest_records(self):
+        with self.condition:
+            return list(self.latest_records), self.inference_count
+
+    def clear_latest_records(self):
+        with self.condition:
+            self.latest_records = []
 
 
 def normalize_classes(classes_text):
@@ -616,80 +836,21 @@ def configure_capture(cap, args, source=None, fast=False):
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
         if args.height:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
-    elif args.auto_resolution and isinstance(source, int) and not fast:
-        choose_best_capture_resolution(cap, args)
+    elif args.auto_resolution and isinstance(source, int):
+        width, height = resolution_request(args.resolution_mode)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
 
     if args.camera_fps:
         cap.set(cv2.CAP_PROP_FPS, args.camera_fps)
 
 
-def choose_best_capture_resolution(cap, args):
-    candidates = resolution_candidates(args.resolution_mode)
-    best = None
-
-    for width, height in candidates:
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        frame = read_probe_frame(cap, attempts=4, delay=0.01)
-        if frame is None:
-            continue
-        actual_h, actual_w = frame.shape[:2]
-        area = actual_w * actual_h
-        target_area = resolution_target_area(args.resolution_mode)
-        if area > target_area * 1.15:
-            continue
-        if best is None or area > best[0]:
-            best = (area, actual_w, actual_h)
-
-    if best is not None:
-        _, width, height = best
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-
-
-def resolution_target_area(mode):
+def resolution_request(mode):
     if mode == "quality":
-        return 1920 * 1080
+        return 1920, 1080
     if mode == "speed":
-        return 960 * 540
-    return 1280 * 720
-
-
-def resolution_candidates(mode):
-    if mode == "quality":
-        return [
-            (1920, 1080),
-            (1600, 1200),
-            (1600, 900),
-            (1440, 1080),
-            (1280, 1024),
-            (1280, 960),
-            (1280, 720),
-            (1024, 768),
-            (1024, 576),
-            (640, 480),
-        ]
-    if mode == "speed":
-        return [
-            (960, 720),
-            (960, 540),
-            (854, 480),
-            (800, 600),
-            (640, 480),
-            (640, 360),
-        ]
-    return [
-        (1280, 960),
-        (1280, 720),
-        (1024, 768),
-        (1024, 576),
-        (960, 720),
-        (960, 540),
-        (854, 480),
-        (800, 600),
-        (640, 480),
-        (640, 360),
-    ]
+        return 960, 540
+    return 1280, 720
 
 
 def open_auto_capture(args, state=None, fast=False):
@@ -756,7 +917,7 @@ def probe_cameras(args):
     original_source = args.source
     for index in range(args.probe_cameras):
         args.source = str(index)
-        cap, _, _ = open_capture(args)
+        cap, _, _, _ = open_capture(args)
         if not cap.isOpened():
             print(f"source {index}: not opened")
             cap.release()
@@ -860,33 +1021,15 @@ def scan_camera_devices(args, current=None):
             source_indexes = list(range(count))
 
         for index in source_indexes:
-            cap, _, opened_backend_name = open_video_capture(index, backend_name)
-            configure_capture(cap, args, index, fast=True)
-            if not cap.isOpened():
-                cap.release()
-                continue
-
-            frame = read_probe_frame(cap, attempts=4, delay=0.02)
-            width = 0
-            height = 0
-            brightness = 0.0
-            status = "opened"
-            if frame is not None:
-                height, width = frame.shape[:2]
-                brightness = float(frame.mean())
-                status = "black" if brightness < args.black_threshold else "ok"
-            else:
-                status = "opened, no frame"
-            cap.release()
             devices.append(
                 {
                     "source": index,
-                    "backend": opened_backend_name,
+                    "backend": backend_name,
                     "name": detected_by_source.get(index, f"Camera {index}"),
-                    "width": width,
-                    "height": height,
-                    "brightness": brightness,
-                    "status": status,
+                    "width": 0,
+                    "height": 0,
+                    "brightness": 0.0,
+                    "status": "click to open",
                 }
             )
     return devices
@@ -930,6 +1073,27 @@ def build_records(result, frame_index, width, height, names):
     return records
 
 
+def scale_records(records, source_width, source_height, detect_width, detect_height):
+    if source_width == detect_width and source_height == detect_height:
+        return records
+
+    scale_x = source_width / detect_width
+    scale_y = source_height / detect_height
+    scaled = []
+    for record in records:
+        next_record = dict(record)
+        next_record["x1"] = round(record["x1"] * scale_x, 2)
+        next_record["y1"] = round(record["y1"] * scale_y, 2)
+        next_record["x2"] = round(record["x2"] * scale_x, 2)
+        next_record["y2"] = round(record["y2"] * scale_y, 2)
+        next_record["center_x"] = round(record["center_x"] * scale_x, 2)
+        next_record["center_y"] = round(record["center_y"] * scale_y, 2)
+        next_record["center_x_norm"] = round(next_record["center_x"] / source_width, 6)
+        next_record["center_y_norm"] = round(next_record["center_y"] / source_height, 6)
+        scaled.append(next_record)
+    return scaled
+
+
 def draw_records(frame, records):
     for record in records:
         color = color_for_id(record["track_id"])
@@ -951,9 +1115,11 @@ def publish_preview_frame(state, cap, args, status_text):
             "--backend, or check camera privacy/exposure settings.",
             flush=True,
         )
+    encoded_frame = resize_stream_frame(preview_frame, args.stream_width)
+    stream_height, stream_width = encoded_frame.shape[:2]
     ok, encoded = cv2.imencode(
         ".jpg",
-        preview_frame,
+        encoded_frame,
         [
             int(cv2.IMWRITE_JPEG_QUALITY),
             args.jpeg_quality,
@@ -969,12 +1135,61 @@ def publish_preview_frame(state, cap, args, status_text):
                 "timestamp": time.time(),
                 "width": width,
                 "height": height,
+                "source_width": width,
+                "source_height": height,
+                "stream_width": stream_width,
+                "stream_height": stream_height,
                 "process_fps": 0,
                 "status": status_text,
                 "objects": [],
             },
         )
     return True
+
+
+def detection_loop(args, state):
+    model = None
+    last_seq = 0
+    last_inference = 0.0
+
+    while not state.stop_event.is_set():
+        item = state.wait_detection_frame(last_seq)
+        if item is None:
+            continue
+        seq, frame, frame_index, size = item
+        last_seq = seq
+
+        if not state.is_detection_enabled():
+            state.clear_latest_records()
+            continue
+
+        now = time.perf_counter()
+        if args.max_fps and now - last_inference < 1.0 / args.max_fps:
+            continue
+
+        if model is None:
+            state.publish_status("Loading YOLO model...")
+            model = YOLO(args.model)
+            print(f"Model loaded: {args.model}", flush=True)
+
+        width, height = size
+        class_ids = state.get_class_ids()
+        track_kwargs = {
+            "source": frame,
+            "classes": class_ids,
+            "conf": args.conf,
+            "device": args.device,
+            "tracker": args.tracker,
+            "persist": True,
+            "verbose": False,
+        }
+        if args.imgsz:
+            track_kwargs["imgsz"] = args.imgsz
+
+        result = model.track(**track_kwargs)[0]
+        records = build_records(result, frame_index, width, height, model.names)
+        state.set_latest_records(records)
+        last_inference = now
 
 
 def capture_loop(args, state):
@@ -997,23 +1212,12 @@ def capture_loop(args, state):
         if not publish_preview_frame(state, cap, args, "Camera preview received. Loading YOLO model..."):
             print("No camera frame received during startup.", flush=True)
 
-    model = None
-
-    def ensure_model():
-        nonlocal model
-        if model is None:
-            state.publish_status("Loading YOLO model...")
-            model = YOLO(args.model)
-            print(f"Model loaded: {args.model}", flush=True)
-        return model
-
     frame_index = 0
-    inference_count = 0
-    last_inference = 0.0
     last_stream = 0.0
-    last_records = []
+    last_detection_submit = 0.0
     started = time.perf_counter()
-    preview_interval = 1.0 / 24.0
+    preview_interval = 1.0 / max(args.stream_fps, 1.0)
+    detection_interval = 1.0 / max(args.max_fps, 1.0) if args.max_fps else 0.0
 
     try:
         while not state.stop_event.is_set():
@@ -1076,35 +1280,27 @@ def capture_loop(args, state):
             frame_index += 1
             height, width = frame.shape[:2]
             brightness = float(frame.mean())
-            records = last_records
-            if not args.max_fps or now - last_inference >= 1.0 / args.max_fps:
-                class_ids = state.get_class_ids()
-                model_instance = ensure_model()
-                track_kwargs = {
-                    "source": frame,
-                    "classes": class_ids,
-                    "conf": args.conf,
-                    "device": args.device,
-                    "tracker": args.tracker,
-                    "persist": True,
-                    "verbose": False,
-                }
-                if args.imgsz:
-                    track_kwargs["imgsz"] = args.imgsz
-
-                result = model_instance.track(**track_kwargs)[0]
-                records = build_records(result, frame_index, width, height, model_instance.names)
-                last_records = records
-                last_inference = now
-                inference_count += 1
+            detection_enabled = state.is_detection_enabled()
+            if not detection_enabled:
+                state.clear_latest_records()
+            else:
+                if not detection_interval or now - last_detection_submit >= detection_interval:
+                    state.submit_detection_frame(frame, frame_index, width, height)
+                    last_detection_submit = now
+            records, inference_count = state.get_latest_records()
 
             if now - last_stream < preview_interval:
                 continue
             last_stream = now
 
+            if not state.has_video_clients():
+                continue
+
             preview = frame.copy()
             if args.draw:
                 draw_records(preview, records)
+            preview = resize_stream_frame(preview, args.stream_width)
+            stream_height, stream_width = preview.shape[:2]
 
             ok, encoded = cv2.imencode(
                 ".jpg",
@@ -1125,6 +1321,10 @@ def capture_loop(args, state):
                 "timestamp": time.time(),
                 "width": width,
                 "height": height,
+                "source_width": width,
+                "source_height": height,
+                "stream_width": stream_width,
+                "stream_height": stream_height,
                 "process_fps": inference_count / elapsed,
                 "objects": records,
             }
@@ -1138,6 +1338,17 @@ def capture_loop(args, state):
         cap.release()
 
 
+def resize_stream_frame(frame, stream_width):
+    if not stream_width or stream_width <= 0:
+        return frame
+    height, width = frame.shape[:2]
+    if width <= stream_width:
+        return frame
+    ratio = stream_width / width
+    stream_height = max(1, int(height * ratio))
+    return cv2.resize(frame, (stream_width, stream_height), interpolation=cv2.INTER_AREA)
+
+
 def make_handler(state, args):
     class LiveHandler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -1147,6 +1358,16 @@ def make_handler(state, args):
         def do_GET(self):
             try:
                 self.route_get()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                return
+
+        def do_POST(self):
+            try:
+                path = urlparse(self.path).path
+                if path == "/detect-frame":
+                    self.detect_frame()
+                    return
+                self.send_error(HTTPStatus.NOT_FOUND)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 return
 
@@ -1177,8 +1398,14 @@ def make_handler(state, args):
             if path == "/classes":
                 self.send_classes()
                 return
+            if path == "/config":
+                self.send_config()
+                return
             if path == "/set-classes":
                 self.set_classes()
+                return
+            if path == "/set-detection":
+                self.set_detection()
                 return
             if path == "/favicon.ico" or path.startswith("/.well-known/"):
                 self.send_response(HTTPStatus.NO_CONTENT)
@@ -1247,6 +1474,81 @@ def make_handler(state, args):
                 return
             self.send_json({"ok": True, "classes": normalized, "class_ids": class_ids})
 
+        def set_detection(self):
+            query = parse_qs(urlparse(self.path).query)
+            value = query.get("enabled", ["0"])[0].strip().lower()
+            enabled = value in {"1", "true", "yes", "on"}
+            state.set_detection_enabled(enabled)
+            self.send_json({"ok": True, "enabled": enabled})
+
+        def detect_frame(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.end_headers()
+                return
+
+            raw = self.rfile.read(length)
+            frame_data = np.frombuffer(raw, dtype=np.uint8)
+            frame = cv2.imdecode(frame_data, cv2.IMREAD_COLOR)
+            if frame is None:
+                self.send_response(HTTPStatus.BAD_REQUEST)
+                self.end_headers()
+                return
+
+            query = parse_qs(urlparse(self.path).query)
+            frame_index = int(query.get("frame", ["0"])[0] or 0)
+            detect_height, detect_width = frame.shape[:2]
+            source_width = int(query.get("source_width", [str(detect_width)])[0] or detect_width)
+            source_height = int(query.get("source_height", [str(detect_height)])[0] or detect_height)
+
+            started = time.perf_counter()
+            with state.http_model_lock:
+                if state.http_model is None:
+                    state.http_model = YOLO(args.model)
+                    print(f"Model loaded: {args.model}", flush=True)
+                model = state.http_model
+                track_kwargs = {
+                    "source": frame,
+                    "classes": state.get_class_ids(),
+                    "conf": args.conf,
+                    "device": args.device,
+                    "tracker": args.tracker,
+                    "persist": True,
+                    "verbose": False,
+                }
+                if args.imgsz:
+                    track_kwargs["imgsz"] = args.imgsz
+                result = model.track(**track_kwargs)[0]
+                records = build_records(result, frame_index, detect_width, detect_height, model.names)
+                records = scale_records(records, source_width, source_height, detect_width, detect_height)
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+
+            self.send_json(
+                {
+                    "frame": frame_index,
+                    "timestamp": time.time(),
+                    "width": source_width,
+                    "height": source_height,
+                    "source_width": source_width,
+                    "source_height": source_height,
+                    "detect_width": detect_width,
+                    "detect_height": detect_height,
+                    "detect_ms": elapsed_ms,
+                    "viewport_space": True,
+                    "objects": records,
+                }
+            )
+
+        def send_config(self):
+            self.send_json(
+                {
+                    "detect_width": args.detect_width,
+                    "max_fps": args.max_fps,
+                    "imgsz": args.imgsz,
+                }
+            )
+
         def stream_events(self):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1278,23 +1580,27 @@ def make_handler(state, args):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             last_seq = -1
-            while not state.stop_event.is_set():
-                with state.condition:
-                    state.condition.wait_for(lambda: state.seq != last_seq or state.stop_event.is_set(), timeout=15)
-                    if state.stop_event.is_set():
+            state.add_video_client()
+            try:
+                while not state.stop_event.is_set():
+                    with state.condition:
+                        state.condition.wait_for(lambda: state.seq != last_seq or state.stop_event.is_set(), timeout=15)
+                        if state.stop_event.is_set():
+                            break
+                        last_seq = state.seq
+                        jpeg = state.jpeg
+                    if jpeg is None:
+                        continue
+                    try:
+                        self.wfile.write(boundary + b"\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
+                        self.wfile.write(jpeg + b"\r\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                         break
-                    last_seq = state.seq
-                    jpeg = state.jpeg
-                if jpeg is None:
-                    continue
-                try:
-                    self.wfile.write(boundary + b"\r\n")
-                    self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                    self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
-                    self.wfile.write(jpeg + b"\r\n")
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                    break
+            finally:
+                state.remove_video_client()
 
     return LiveHandler
 
@@ -1322,7 +1628,7 @@ def main():
         "--no-auto-resolution",
         dest="auto_resolution",
         action="store_false",
-        help="Do not probe common HD resolutions when opening a camera.",
+        help="Do not request a resolution preset when opening a camera.",
     )
     parser.add_argument(
         "--resolution-mode",
@@ -1332,7 +1638,10 @@ def main():
     )
     parser.add_argument("--camera-fps", type=float, default=0, help="Requested camera FPS.")
     parser.add_argument("--max-fps", type=float, default=12, help="Limit processed FPS. Default: 12.")
-    parser.add_argument("--jpeg-quality", type=int, default=80, help="MJPEG JPEG quality, 1-100. Default: 80.")
+    parser.add_argument("--detect-width", type=int, default=480, help="Browser frame width sent to detector. Default: 480.")
+    parser.add_argument("--stream-width", type=int, default=1280, help="Max MJPEG stream width. Use 0 for source width.")
+    parser.add_argument("--stream-fps", type=float, default=24, help="MJPEG stream FPS. Default: 24.")
+    parser.add_argument("--jpeg-quality", type=int, default=75, help="MJPEG JPEG quality, 1-100. Default: 75.")
     parser.add_argument("--draw", action="store_true", help="Also draw server-side stickers into the MJPEG stream.")
     parser.add_argument("--quiet", action="store_true", help="Hide HTTP access logs.")
     parser.add_argument("--auto-sources", type=int, default=6, help="Number of camera indexes to scan for --source auto.")
@@ -1352,8 +1661,10 @@ def main():
         return
 
     state = LiveState()
-    worker = threading.Thread(target=capture_loop, args=(args, state), daemon=True)
-    worker.start()
+    capture_worker = threading.Thread(target=capture_loop, args=(args, state), daemon=True)
+    detect_worker = threading.Thread(target=detection_loop, args=(args, state), daemon=True)
+    capture_worker.start()
+    detect_worker.start()
 
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state, args))
     server.quiet = args.quiet
@@ -1368,7 +1679,10 @@ def main():
         with state.condition:
             state.condition.notify_all()
         server.server_close()
-        worker.join(timeout=3)
+        with state.detect_condition:
+            state.detect_condition.notify_all()
+        capture_worker.join(timeout=3)
+        detect_worker.join(timeout=3)
 
 
 if __name__ == "__main__":
