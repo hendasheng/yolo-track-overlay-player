@@ -106,15 +106,6 @@ HTML_PAGE = """<!doctype html>
         gap: 8px;
       }
       .control-panel strong { font-size: 14px; }
-      .control-panel button {
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        border-radius: 6px;
-        padding: 7px 9px;
-        color: #f4f7f5;
-        background: rgba(255, 255, 255, 0.08);
-        font: inherit;
-        cursor: pointer;
-      }
       .field {
         display: grid;
         gap: 5px;
@@ -162,7 +153,6 @@ HTML_PAGE = """<!doctype html>
     <section class="control-panel">
       <header>
         <strong>Live Controls</strong>
-        <button id="scanCameras" type="button">Scan</button>
       </header>
       <label class="field">
         Camera
@@ -194,7 +184,6 @@ HTML_PAGE = """<!doctype html>
       const fpsStat = document.querySelector("#fpsStat");
       const sizeStat = document.querySelector("#sizeStat");
       const status = document.querySelector("#status");
-      const scanCameras = document.querySelector("#scanCameras");
       const cameraSelect = document.querySelector("#cameraSelect");
       const cameraDetail = document.querySelector("#cameraDetail");
       const classSelect = document.querySelector("#classSelect");
@@ -203,6 +192,8 @@ HTML_PAGE = """<!doctype html>
       let latest = { width: 1, height: 1, objects: [] };
       let streamNaturalWidth = 1;
       let streamNaturalHeight = 1;
+      let pendingCameraValue = "";
+      let currentCameraValue = "";
 
       function resizeCanvas() {
         const dpr = window.devicePixelRatio || 1;
@@ -304,7 +295,7 @@ HTML_PAGE = """<!doctype html>
         ctx.clearRect(0, 0, canvas.width, canvas.height);
       });
       async function refreshCameras() {
-        scanCameras.disabled = true;
+        const previousValue = pendingCameraValue || currentCameraValue || cameraSelect.value;
         cameraSelect.innerHTML = "";
         const loading = document.createElement("option");
         loading.textContent = "Scanning...";
@@ -314,39 +305,60 @@ HTML_PAGE = """<!doctype html>
         try {
           const response = await fetch("/cameras");
           const data = await response.json();
+          const current = data.current || null;
+          currentCameraValue = current ? `${current.source}|${current.backend}` : "";
           cameraSelect.innerHTML = "";
           const placeholder = document.createElement("option");
           placeholder.textContent = "Choose camera";
-          placeholder.value = "";
+          placeholder.value = "none|any";
           cameraSelect.appendChild(placeholder);
           for (const camera of data.cameras || []) {
-            const detail = camera.width
-              ? `${camera.width}x${camera.height} · brightness ${camera.brightness.toFixed(1)} · ${camera.status}`
-              : camera.status;
+            const meta = [];
+            meta.push(`source ${camera.source}`);
+            if (camera.width) meta.push(`${camera.width}x${camera.height}`);
+            if (typeof camera.brightness === "number" && camera.width) {
+              meta.push(`brightness ${camera.brightness.toFixed(1)}`);
+            }
+            meta.push(camera.status);
+            const detail = meta.join(" · ");
             const option = document.createElement("option");
             option.value = `${camera.source}|${camera.backend}`;
             option.textContent = camera.name || `Camera ${camera.source}`;
             option.dataset.detail = `Source ${camera.source} · ${camera.backend} · ${detail}`;
             cameraSelect.appendChild(option);
           }
-          if (cameraSelect.options.length === 1) cameraDetail.textContent = "No camera found.";
-          else cameraDetail.textContent = "Choose a camera source.";
+          const targetValue = previousValue || currentCameraValue;
+          if (targetValue) {
+            const match = [...cameraSelect.options].find((option) => option.value === targetValue);
+            if (match) {
+              cameraSelect.value = targetValue;
+              cameraDetail.textContent = match.dataset.detail || "";
+            }
+          }
+          if (!cameraSelect.value) {
+            if (cameraSelect.options.length === 1) cameraDetail.textContent = "No camera found.";
+            else cameraDetail.textContent = "Choose a camera source.";
+            cameraSelect.value = "none|any";
+          }
         } catch (error) {
           cameraSelect.innerHTML = "";
           cameraDetail.textContent = "Camera scan failed.";
-        } finally {
-          scanCameras.disabled = false;
         }
       }
-      scanCameras.onclick = refreshCameras;
       cameraSelect.onchange = async () => {
-        if (!cameraSelect.value) return;
         const [source, backend] = cameraSelect.value.split("|");
         const selected = cameraSelect.selectedOptions[0];
+        pendingCameraValue = cameraSelect.value;
         cameraDetail.textContent = selected?.dataset.detail || "";
-        status.textContent = `Switching to ${selected?.textContent || "camera"}...`;
+        status.textContent = source === "none"
+          ? "Stopping camera..."
+          : `Switching to ${selected?.textContent || "camera"}...`;
         status.classList.remove("is-hidden");
-        await fetch(`/select-camera?source=${source}&backend=${backend}`);
+        const response = await fetch(`/select-camera?source=${source}&backend=${backend}`);
+        const data = await response.json();
+        if (data.ok) {
+          currentCameraValue = `${data.source}|${data.backend}`;
+        }
       };
       function currentClasses() {
         return classSelect.value === "custom" ? customClassInput.value : classSelect.value;
@@ -463,6 +475,10 @@ class LiveState:
         with self.condition:
             self.current_camera = {"source": source, "backend": backend}
 
+    def clear_current_camera(self):
+        with self.condition:
+            self.current_camera = None
+
     def set_classes(self, classes_text):
         normalized = normalize_classes(classes_text)
         class_ids = parse_classes(normalized)
@@ -527,6 +543,27 @@ def camera_backend(name, source):
     return backends[key]
 
 
+def open_video_capture(source, backend_name):
+    backend = camera_backend(backend_name, source)
+    system = platform.system().lower()
+    attempts = [(backend_name, lambda: cv2.VideoCapture(source, backend))]
+
+    # On macOS, some OpenCV builds behave better if we let the backend auto-resolve
+    # after an explicit AVFoundation attempt.
+    if system == "darwin" and isinstance(source, int) and backend_name in {"auto", "any", "avfoundation"}:
+        attempts.append(("any", lambda: cv2.VideoCapture(source)))
+
+    last_cap = None
+    for label, opener in attempts:
+        cap = opener()
+        last_cap = cap
+        if cap.isOpened():
+            return cap, backend if label == backend_name else cv2.CAP_ANY, label
+        cap.release()
+
+    return last_cap or cv2.VideoCapture(), backend, backend_name
+
+
 def read_probe_frame(cap, attempts=30, delay=0.03):
     best_frame = None
     best_brightness = -1.0
@@ -541,42 +578,45 @@ def read_probe_frame(cap, attempts=30, delay=0.03):
     return best_frame
 
 
-def open_capture(args, state=None):
+def open_capture(args, state=None, fast=False):
     source = parse_source(args.source)
     if source == "none":
         if state is not None:
             state.publish_status("Select a camera from the Cameras panel.")
-        return cv2.VideoCapture(), "none", cv2.CAP_ANY
+        return cv2.VideoCapture(), "none", cv2.CAP_ANY, "any"
     if source == "auto":
-        return open_auto_capture(args, state)
+        return open_auto_capture(args, state, fast=fast)
 
-    backend = camera_backend(args.backend, source)
     if state is not None:
         state.publish_status(f"Opening camera source={source}, backend={args.backend}...")
-    cap = cv2.VideoCapture(source, backend)
-    configure_capture(cap, args, source)
-    return cap, source, backend
+    cap, backend, opened_backend_name = open_video_capture(source, args.backend)
+    configure_capture(cap, args, source, fast=fast)
+    if state is not None and opened_backend_name != args.backend and cap.isOpened():
+        state.publish_status(
+            f"Opening camera source={source}, backend={args.backend}... fallback to {opened_backend_name}."
+        )
+    return cap, source, backend, opened_backend_name
 
 
-def open_requested_capture(args, source, backend_name, state=None):
+def open_requested_capture(args, source, backend_name, state=None, fast=False):
     previous_source = args.source
     previous_backend = args.backend
     args.source = str(source)
     args.backend = backend_name
     try:
-        return open_capture(args, state)
+        return open_capture(args, state, fast=fast)
     finally:
         args.source = previous_source
         args.backend = previous_backend
 
 
-def configure_capture(cap, args, source=None):
+def configure_capture(cap, args, source=None, fast=False):
     if args.width or args.height:
         if args.width:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
         if args.height:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
-    elif args.auto_resolution and isinstance(source, int):
+    elif args.auto_resolution and isinstance(source, int) and not fast:
         choose_best_capture_resolution(cap, args)
 
     if args.camera_fps:
@@ -652,17 +692,21 @@ def resolution_candidates(mode):
     ]
 
 
-def open_auto_capture(args, state=None):
-    backend_names = [args.backend] if args.backend != "auto" else ["dshow", "msmf", "any"]
+def open_auto_capture(args, state=None, fast=False):
+    if args.backend != "auto":
+        backend_names = [args.backend]
+    elif platform.system().lower() == "darwin":
+        backend_names = ["avfoundation", "any"]
+    else:
+        backend_names = ["dshow", "msmf", "any"]
     fallback = None
 
     for backend_name in backend_names:
         for index in range(args.auto_sources):
             if state is not None:
                 state.publish_status(f"Scanning camera source={index}, backend={backend_name}...")
-            backend = camera_backend(backend_name, index)
-            cap = cv2.VideoCapture(index, backend)
-            configure_capture(cap, args, index)
+            cap, backend, opened_backend_name = open_video_capture(index, backend_name)
+            configure_capture(cap, args, index, fast=fast)
             if not cap.isOpened():
                 if state is not None:
                     state.publish_status(f"Camera source={index}, backend={backend_name} did not open.")
@@ -672,15 +716,15 @@ def open_auto_capture(args, state=None):
             frame = read_probe_frame(cap, attempts=args.startup_frames)
             brightness = float(frame.mean()) if frame is not None else -1.0
             if fallback is None and frame is not None:
-                fallback = (index, backend, backend_name, brightness)
+                fallback = (index, backend, opened_backend_name, brightness)
 
             if brightness >= args.black_threshold:
                 print(
-                    f"Auto selected camera: source={index}, backend={backend_name}, "
+                    f"Auto selected camera: source={index}, backend={opened_backend_name}, "
                     f"brightness={brightness:.1f}",
                     flush=True,
                 )
-                return cap, index, backend
+                return cap, index, backend, opened_backend_name
 
             print(
                 f"Auto skipped camera: source={index}, backend={backend_name}, "
@@ -697,15 +741,15 @@ def open_auto_capture(args, state=None):
     if fallback is not None:
         index, backend, backend_name, brightness = fallback
         cap = cv2.VideoCapture(index, backend)
-        configure_capture(cap, args, index)
+        configure_capture(cap, args, index, fast=fast)
         print(
             f"Auto fallback camera is still black: source={index}, backend={backend_name}, "
             f"brightness={brightness:.1f}",
             flush=True,
         )
-        return cap, index, backend
+        return cap, index, backend, backend_name
 
-    return cv2.VideoCapture(), "auto", cv2.CAP_ANY
+    return cv2.VideoCapture(), "auto", cv2.CAP_ANY, "any"
 
 
 def probe_cameras(args):
@@ -731,81 +775,6 @@ def probe_cameras(args):
     args.source = original_source
 
 
-def windows_camera_names():
-    if platform.system().lower() != "windows":
-        return []
-
-    names = ffmpeg_dshow_camera_names()
-    if names:
-        return names
-
-    queries = [
-        (
-            "Get-PnpDevice -PresentOnly | "
-            "Where-Object { $_.FriendlyName -and ($_.Class -in @('Camera','Image') -or "
-            "$_.FriendlyName -match 'Camera|Webcam|Video|OBS|NDI') } | "
-            "Select-Object -ExpandProperty FriendlyName | "
-            "ConvertTo-Json -Compress"
-        ),
-        (
-            "Get-CimInstance Win32_PnPEntity | "
-            "Where-Object { $_.Name -and ($_.PNPClass -in @('Camera','Image') -or "
-            "$_.Name -match 'Camera|Webcam|Video|OBS|NDI') } | "
-            "Select-Object -ExpandProperty Name | "
-            "ConvertTo-Json -Compress"
-        ),
-    ]
-
-    for query in queries:
-        command = [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            query,
-        ]
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-
-        text = result.stdout.strip()
-        if not text:
-            continue
-        try:
-            names = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(names, str):
-            names = [names]
-        names = [name for name in names if isinstance(name, str)]
-        if names:
-            return names
-    return []
-
-
-def macos_camera_names():
-    if platform.system().lower() != "darwin":
-        return []
-    return ffmpeg_avfoundation_camera_names()
-
-
-def camera_device_names():
-    system = platform.system().lower()
-    if system == "windows":
-        return windows_camera_names()
-    if system == "darwin":
-        return macos_camera_names()
-    return []
-
-
 def ffmpeg_dshow_camera_names():
     try:
         result = subprocess.run(
@@ -827,7 +796,7 @@ def ffmpeg_dshow_camera_names():
     return names
 
 
-def ffmpeg_avfoundation_camera_names():
+def ffmpeg_avfoundation_camera_devices():
     try:
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
@@ -840,7 +809,7 @@ def ffmpeg_avfoundation_camera_names():
         return []
 
     text = "\n".join([result.stderr or "", result.stdout or ""])
-    names = []
+    devices = []
     in_video_section = False
     for line in text.splitlines():
         if "AVFoundation video devices" in line:
@@ -853,13 +822,23 @@ def ffmpeg_avfoundation_camera_names():
             continue
         match = re.search(r"\[(\d+)\]\s+(.+)$", line)
         if match:
-            names.append(match.group(2).strip())
-    return names
+            devices.append({"source": int(match.group(1)), "name": match.group(2).strip()})
+    return devices
 
 
-def scan_camera_devices(args):
+def camera_device_entries():
+    system = platform.system().lower()
+    if system == "windows":
+        return [{"source": index, "name": name} for index, name in enumerate(ffmpeg_dshow_camera_names())]
+    if system == "darwin":
+        return ffmpeg_avfoundation_camera_devices()
+    return []
+
+
+def scan_camera_devices(args, current=None):
     devices = []
-    names = camera_device_names()
+    detected_entries = camera_device_entries()
+    detected_by_source = {entry["source"]: entry["name"] for entry in detected_entries}
     if args.backend == "auto":
         if platform.system().lower() == "windows":
             backend_names = ["dshow"]
@@ -869,19 +848,45 @@ def scan_camera_devices(args):
             backend_names = ["any"]
     else:
         backend_names = [args.backend]
-    count = max(len(names), args.auto_sources if not names else 0)
+    current_source = -1
+    if current and isinstance(current.get("source"), int):
+        current_source = current["source"]
 
     for backend_name in backend_names:
-        for index in range(count):
+        if backend_name == "avfoundation" and detected_entries:
+            source_indexes = sorted(set(detected_by_source.keys()) | ({current_source} if current_source >= 0 else set()))
+        else:
+            count = max(args.auto_sources, current_source + 1, len(detected_entries))
+            source_indexes = list(range(count))
+
+        for index in source_indexes:
+            cap, _, opened_backend_name = open_video_capture(index, backend_name)
+            configure_capture(cap, args, index, fast=True)
+            if not cap.isOpened():
+                cap.release()
+                continue
+
+            frame = read_probe_frame(cap, attempts=4, delay=0.02)
+            width = 0
+            height = 0
+            brightness = 0.0
+            status = "opened"
+            if frame is not None:
+                height, width = frame.shape[:2]
+                brightness = float(frame.mean())
+                status = "black" if brightness < args.black_threshold else "ok"
+            else:
+                status = "opened, no frame"
+            cap.release()
             devices.append(
                 {
                     "source": index,
-                    "backend": backend_name,
-                    "name": names[index] if index < len(names) else f"Camera {index}",
-                    "width": 0,
-                    "height": 0,
-                    "brightness": 0.0,
-                    "status": "click to test",
+                    "backend": opened_backend_name,
+                    "name": detected_by_source.get(index, f"Camera {index}"),
+                    "width": width,
+                    "height": height,
+                    "brightness": brightness,
+                    "status": status,
                 }
             )
     return devices
@@ -932,73 +937,117 @@ def draw_records(frame, records):
         draw_sticker(frame, record["track_id"], record["class_name"], box, color)
 
 
+def publish_preview_frame(state, cap, args, status_text):
+    preview_frame = read_probe_frame(cap, attempts=min(args.startup_frames, 10), delay=0.02)
+    if preview_frame is None:
+        return False
+
+    height, width = preview_frame.shape[:2]
+    brightness = float(preview_frame.mean())
+    print(f"First frame received: {width}x{height}, brightness={brightness:.1f}", flush=True)
+    if brightness < 3:
+        print(
+            "Warning: first camera frame is almost black. Try another --source, "
+            "--backend, or check camera privacy/exposure settings.",
+            flush=True,
+        )
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        preview_frame,
+        [
+            int(cv2.IMWRITE_JPEG_QUALITY),
+            args.jpeg_quality,
+            int(cv2.IMWRITE_JPEG_OPTIMIZE),
+            0,
+        ],
+    )
+    if ok:
+        state.publish(
+            encoded.tobytes(),
+            {
+                "frame": 0,
+                "timestamp": time.time(),
+                "width": width,
+                "height": height,
+                "process_fps": 0,
+                "status": status_text,
+                "objects": [],
+            },
+        )
+    return True
+
+
 def capture_loop(args, state):
     state.set_classes(args.classes)
-    state.publish_status("Starting camera capture...")
-    cap, source, backend = open_capture(args, state)
-    if source != "none" and not cap.isOpened():
-        state.stop_event.set()
-        raise RuntimeError(f"Cannot open source: {args.source}")
-    print(f"Capture opened: source={source}, backend={backend}", flush=True)
-    state.set_current_camera(source, backend)
-
-    preview_frame = read_probe_frame(cap, attempts=args.startup_frames)
-    if preview_frame is not None:
-        height, width = preview_frame.shape[:2]
-        brightness = float(preview_frame.mean())
-        print(f"First frame received: {width}x{height}, brightness={brightness:.1f}", flush=True)
-        if brightness < 3:
-            print(
-                "Warning: first camera frame is almost black. Try another --source, "
-                "--backend, or check camera privacy/exposure settings.",
-                flush=True,
-            )
-        ok, encoded = cv2.imencode(
-            ".jpg",
-            preview_frame,
-            [
-                int(cv2.IMWRITE_JPEG_QUALITY),
-                args.jpeg_quality,
-                int(cv2.IMWRITE_JPEG_OPTIMIZE),
-                0,
-            ],
-        )
-        if ok:
-            state.publish(
-                encoded.tobytes(),
-                {
-                    "frame": 0,
-                    "timestamp": time.time(),
-                    "width": width,
-                    "height": height,
-                    "process_fps": 0,
-                    "status": "Camera preview received. Loading YOLO model...",
-                    "objects": [],
-                },
-            )
+    source = parse_source(args.source)
+    backend = cv2.CAP_ANY
+    backend_name = "any"
+    cap = cv2.VideoCapture()
+    if source == "none":
+        state.clear_current_camera()
+        state.publish_status("Select a camera from the Cameras panel.")
     else:
-        print("No camera frame received during startup.", flush=True)
+        state.publish_status("Starting camera capture...")
+        cap, source, backend, backend_name = open_capture(args, state)
+        if not cap.isOpened():
+            state.stop_event.set()
+            raise RuntimeError(f"Cannot open source: {args.source}")
+        print(f"Capture opened: source={source}, backend={backend_name}", flush=True)
+        state.set_current_camera(source, backend_name)
+        if not publish_preview_frame(state, cap, args, "Camera preview received. Loading YOLO model..."):
+            print("No camera frame received during startup.", flush=True)
 
-    model = YOLO(args.model)
-    print(f"Model loaded: {args.model}", flush=True)
+    model = None
+
+    def ensure_model():
+        nonlocal model
+        if model is None:
+            state.publish_status("Loading YOLO model...")
+            model = YOLO(args.model)
+            print(f"Model loaded: {args.model}", flush=True)
+        return model
+
     frame_index = 0
-    last_publish = 0.0
+    inference_count = 0
+    last_inference = 0.0
+    last_stream = 0.0
+    last_records = []
     started = time.perf_counter()
+    preview_interval = 1.0 / 24.0
 
     try:
         while not state.stop_event.is_set():
             camera_request = state.take_camera_request()
             if camera_request is not None:
                 next_source, next_backend_name = camera_request
-                cap.release()
-                cap, source, backend = open_requested_capture(args, next_source, next_backend_name, state)
-                if not cap.isOpened():
-                    state.publish_status(f"Camera source={next_source}, backend={next_backend_name} did not open.")
-                    time.sleep(0.2)
-                    cap, source, backend = open_capture(args, state)
+                if cap.isOpened():
+                    cap.release()
+                if str(next_source).lower() in {"none", "off"}:
+                    source = "none"
+                    backend = cv2.CAP_ANY
+                    backend_name = "any"
+                    cap = cv2.VideoCapture()
+                    state.clear_current_camera()
+                    state.publish_status("Select a camera from the Cameras panel.")
                     continue
-                print(f"Capture switched: source={source}, backend={backend}", flush=True)
-                state.set_current_camera(source, backend)
+                cap, source, backend, backend_name = open_requested_capture(
+                    args,
+                    next_source,
+                    next_backend_name,
+                    state,
+                    fast=True,
+                )
+                if not cap.isOpened():
+                    source = "none"
+                    backend = cv2.CAP_ANY
+                    backend_name = "any"
+                    state.clear_current_camera()
+                    state.publish_status(f"Camera source={next_source}, backend={next_backend_name} did not open.")
+                    continue
+                print(f"Capture switched: source={source}, backend={backend_name}", flush=True)
+                state.set_current_camera(source, backend_name)
+                if not publish_preview_frame(state, cap, args, f"Camera switched: source={source}, backend={backend_name}"):
+                    state.publish_status(f"Camera source={source}, backend={backend_name} opened, waiting for frames...")
 
             if not cap.isOpened():
                 time.sleep(0.1)
@@ -1012,40 +1061,47 @@ def capture_loop(args, state):
                 if isinstance(source, int):
                     print(
                         f"Camera frame grab failed. Reopening source {source} "
-                        f"with backend {args.backend}...",
+                        f"with backend {backend_name}...",
                         flush=True,
                     )
                     cap.release()
                     time.sleep(0.5)
-                    cap = cv2.VideoCapture(source, backend)
-                    configure_capture(cap, args, source)
+                    cap, backend, backend_name = open_video_capture(source, backend_name)
+                    configure_capture(cap, args, source, fast=True)
                     continue
                 time.sleep(0.05)
                 continue
 
             now = time.perf_counter()
-            if args.max_fps and now - last_publish < 1.0 / args.max_fps:
-                continue
-            last_publish = now
-
             frame_index += 1
             height, width = frame.shape[:2]
             brightness = float(frame.mean())
-            class_ids = state.get_class_ids()
-            track_kwargs = {
-                "source": frame,
-                "classes": class_ids,
-                "conf": args.conf,
-                "device": args.device,
-                "tracker": args.tracker,
-                "persist": True,
-                "verbose": False,
-            }
-            if args.imgsz:
-                track_kwargs["imgsz"] = args.imgsz
+            records = last_records
+            if not args.max_fps or now - last_inference >= 1.0 / args.max_fps:
+                class_ids = state.get_class_ids()
+                model_instance = ensure_model()
+                track_kwargs = {
+                    "source": frame,
+                    "classes": class_ids,
+                    "conf": args.conf,
+                    "device": args.device,
+                    "tracker": args.tracker,
+                    "persist": True,
+                    "verbose": False,
+                }
+                if args.imgsz:
+                    track_kwargs["imgsz"] = args.imgsz
 
-            result = model.track(**track_kwargs)[0]
-            records = build_records(result, frame_index, width, height, model.names)
+                result = model_instance.track(**track_kwargs)[0]
+                records = build_records(result, frame_index, width, height, model_instance.names)
+                last_records = records
+                last_inference = now
+                inference_count += 1
+
+            if now - last_stream < preview_interval:
+                continue
+            last_stream = now
+
             preview = frame.copy()
             if args.draw:
                 draw_records(preview, records)
@@ -1069,7 +1125,7 @@ def capture_loop(args, state):
                 "timestamp": time.time(),
                 "width": width,
                 "height": height,
-                "process_fps": frame_index / elapsed,
+                "process_fps": inference_count / elapsed,
                 "objects": records,
             }
             if brightness < args.black_threshold:
@@ -1146,9 +1202,9 @@ def make_handler(state, args):
             self.send_json(payload)
 
         def send_cameras(self):
-            cameras = scan_camera_devices(args)
             with state.condition:
                 current = state.current_camera
+            cameras = scan_camera_devices(args, current)
             self.send_json({"current": current, "cameras": cameras})
 
         def select_camera(self):
@@ -1275,8 +1331,8 @@ def main():
         help="Auto camera resolution preference. Default: balanced.",
     )
     parser.add_argument("--camera-fps", type=float, default=0, help="Requested camera FPS.")
-    parser.add_argument("--max-fps", type=float, default=0, help="Limit processed FPS. 0 means unlimited.")
-    parser.add_argument("--jpeg-quality", type=int, default=96, help="MJPEG JPEG quality, 1-100.")
+    parser.add_argument("--max-fps", type=float, default=12, help="Limit processed FPS. Default: 12.")
+    parser.add_argument("--jpeg-quality", type=int, default=80, help="MJPEG JPEG quality, 1-100. Default: 80.")
     parser.add_argument("--draw", action="store_true", help="Also draw server-side stickers into the MJPEG stream.")
     parser.add_argument("--quiet", action="store_true", help="Hide HTTP access logs.")
     parser.add_argument("--auto-sources", type=int, default=6, help="Number of camera indexes to scan for --source auto.")
