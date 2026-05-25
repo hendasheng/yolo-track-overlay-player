@@ -22,6 +22,7 @@ CLASS_ALIASES = {
     "truck": 7,
     "boat": 8,
     "bird": 14,
+    "brid": 14,
     "cat": 15,
     "dog": 16,
     "horse": 17,
