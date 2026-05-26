@@ -7,7 +7,7 @@
 1. 用 YOLO 检测并跟踪人、车、鸟等目标。
 2. 输出带贴纸的视频，方便检查识别效果。
 3. 输出 `CSV / JSONL` 数据，方便前端、MIDI、TouchDesigner 或其他视觉系统使用。
-4. 启动实时摄像头检测页面，在浏览器里选择摄像头和检测类别。
+4. 启动实时摄像头检测页面，在浏览器里选择摄像头和检测类别，同帧输出检测画面。
 5. 用前端播放器加载原视频和跟踪数据，验证图形叠加是否准确。
 
 ## 目录结构
@@ -161,6 +161,14 @@ python scripts\live_track_server.py
 
 ```text
 http://127.0.0.1:8765
+```
+
+实时页面默认由服务端打开摄像头，并把 YOLO 检测框画进同一帧 MJPEG 画面，优先保证框和画面对齐。
+
+实时检测精度优先示例：
+
+```powershell
+python scripts\live_track_server.py --device 0 --classes car --model yolo11s.pt --detect-width 640 --imgsz 640 --conf 0.1
 ```
 
 前端离线叠加播放器：

@@ -44,14 +44,14 @@ HTML_PAGE = """<!doctype html>
         inset: 0;
         background: #080a09;
       }
-      #browserPreview, #overlay {
+      #serverPreview, #overlay {
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
         object-fit: cover;
       }
-      #browserPreview { background: #050706; }
+      #serverPreview { background: #050706; }
       #overlay { pointer-events: none; }
       .hud {
         position: fixed;
@@ -161,7 +161,7 @@ HTML_PAGE = """<!doctype html>
   </head>
   <body>
     <main class="stage">
-      <video id="browserPreview" autoplay muted playsinline></video>
+      <img id="serverPreview" src="/video" alt="" />
       <canvas id="overlay"></canvas>
     </main>
     <section class="control-panel">
@@ -195,7 +195,7 @@ HTML_PAGE = """<!doctype html>
       <div><span>Size</span><strong id="sizeStat">-</strong></div>
     </aside>
     <script>
-      const browserPreview = document.querySelector("#browserPreview");
+      const serverPreview = document.querySelector("#serverPreview");
       const canvas = document.querySelector("#overlay");
       const ctx = canvas.getContext("2d");
       const frameStat = document.querySelector("#frameStat");
@@ -215,15 +215,10 @@ HTML_PAGE = """<!doctype html>
       let streamNaturalHeight = 1;
       let pendingCameraValue = "";
       let currentCameraValue = "";
-      let browserStream = null;
-      let detectionTimer = 0;
-      let detecting = false;
-      let detectFrame = 0;
       let detectStarted = 0;
       let latestDetectionAt = 0;
       let configPromise = null;
-      const detectCanvas = document.createElement("canvas");
-      const detectCtx = detectCanvas.getContext("2d");
+      let eventSource = null;
 
       async function getConfig() {
         if (!configPromise) {
@@ -273,6 +268,10 @@ HTML_PAGE = """<!doctype html>
       function draw() {
         const size = resizeCanvas();
         ctx.clearRect(0, 0, size.w, size.h);
+        if (latest.server_drawn) {
+          requestAnimationFrame(draw);
+          return;
+        }
         if (latest.viewport_space) {
           const age = latestDetectionAt ? performance.now() - latestDetectionAt : 0;
           if (age <= 220) {
@@ -339,12 +338,12 @@ HTML_PAGE = """<!doctype html>
         ctx.fillText(label, labelX + 7, labelY + labelH / 2);
       }
 
-      browserPreview.onloadedmetadata = () => {
-        streamNaturalWidth = browserPreview.videoWidth || streamNaturalWidth;
-        streamNaturalHeight = browserPreview.videoHeight || streamNaturalHeight;
-        latest.width = streamNaturalWidth;
-        latest.height = streamNaturalHeight;
-        sizeStat.textContent = `${streamNaturalWidth}x${streamNaturalHeight}`;
+      serverPreview.onload = () => {
+        status.classList.add("is-hidden");
+      };
+      serverPreview.onerror = () => {
+        status.textContent = "Waiting for server video stream...";
+        status.classList.remove("is-hidden");
       };
       window.addEventListener("resize", () => {
         resizeCanvas();
@@ -360,13 +359,9 @@ HTML_PAGE = """<!doctype html>
         cameraSelect.appendChild(loading);
         cameraDetail.textContent = "Scanning camera devices...";
         try {
-          let devices = await navigator.mediaDevices.enumerateDevices();
-          if (!devices.some((device) => device.kind === "videoinput" && device.label)) {
-            const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-            for (const track of permissionStream.getTracks()) track.stop();
-            devices = await navigator.mediaDevices.enumerateDevices();
-          }
-          const cameras = devices.filter((device) => device.kind === "videoinput");
+          const response = await fetch("/cameras");
+          const data = await response.json();
+          const cameras = data.cameras || [];
           cameraSelect.innerHTML = "";
           const placeholder = document.createElement("option");
           placeholder.textContent = "Choose camera";
@@ -374,12 +369,16 @@ HTML_PAGE = """<!doctype html>
           cameraSelect.appendChild(placeholder);
           for (const camera of cameras) {
             const option = document.createElement("option");
-            option.value = camera.deviceId;
-            option.textContent = camera.label || `Camera ${cameraSelect.options.length}`;
-            option.dataset.detail = option.textContent;
+            option.value = `${camera.source}|${camera.backend}`;
+            option.textContent = camera.name || `Camera ${camera.source}`;
+            option.dataset.source = camera.source;
+            option.dataset.backend = camera.backend;
+            option.dataset.detail = `source=${camera.source}, backend=${camera.backend}`;
             cameraSelect.appendChild(option);
           }
-          const targetValue = previousValue || currentCameraValue;
+          const current = data.current;
+          const currentValue = current ? `${current.source}|${current.backend}` : "";
+          const targetValue = previousValue || currentCameraValue || currentValue;
           if (targetValue) {
             const match = [...cameraSelect.options].find((option) => option.value === targetValue);
             if (match) {
@@ -397,35 +396,18 @@ HTML_PAGE = """<!doctype html>
         }
       }
       cameraSelect.onchange = async () => {
-        const deviceId = cameraSelect.value;
         const selected = cameraSelect.selectedOptions[0];
         pendingCameraValue = cameraSelect.value;
         cameraDetail.textContent = selected?.dataset.detail || "";
         status.textContent = `Switching to ${selected?.textContent || "camera"}...`;
         status.classList.remove("is-hidden");
-        await startBrowserCamera(deviceId);
-        currentCameraValue = deviceId;
+        if (!selected?.dataset.source) return;
+        const source = encodeURIComponent(selected.dataset.source);
+        const backend = encodeURIComponent(selected.dataset.backend || "auto");
+        await fetch(`/select-camera?source=${source}&backend=${backend}`);
+        currentCameraValue = cameraSelect.value;
+        serverPreview.src = `/video?ts=${Date.now()}`;
       };
-      function stopBrowserCamera() {
-        if (browserStream) {
-          for (const track of browserStream.getTracks()) track.stop();
-          browserStream = null;
-        }
-        browserPreview.srcObject = null;
-      }
-      async function startBrowserCamera(deviceId) {
-        stopBrowserCamera();
-        const constraints = {
-          video: deviceId
-            ? { deviceId: { exact: deviceId } }
-            : { width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false,
-        };
-        browserStream = await navigator.mediaDevices.getUserMedia(constraints);
-        browserPreview.srcObject = browserStream;
-        await browserPreview.play();
-        status.classList.add("is-hidden");
-      }
       function currentClasses() {
         return classSelect.value === "custom" ? customClassInput.value : classSelect.value;
       }
@@ -471,80 +453,49 @@ HTML_PAGE = """<!doctype html>
       }
       classSelect.onchange = updateClasses;
       detectionToggle.onchange = async () => {
-        if (detectionToggle.checked) startDetectionLoop();
-        else stopDetectionLoop();
+        await setDetectionEnabled(detectionToggle.checked);
       };
-      function startDetectionLoop() {
-        if (detectionTimer) return;
-        detectStarted = performance.now();
+      async function setDetectionEnabled(enabled) {
         latestDetectionAt = 0;
-        status.textContent = "Detection on";
-        status.classList.remove("is-hidden");
-        detectionTimer = window.setInterval(sendDetectionFrame, 80);
-      }
-      function stopDetectionLoop() {
-        window.clearInterval(detectionTimer);
-        detectionTimer = 0;
-        detecting = false;
         latest.objects = [];
-        latestDetectionAt = 0;
-        objectStat.textContent = "0";
-        fpsStat.textContent = "-";
-        detectStat.textContent = "-";
-        status.textContent = "Detection off";
+        detectStarted = performance.now();
+        status.textContent = enabled ? "Detection on" : "Detection off";
         status.classList.remove("is-hidden");
-      }
-      async function sendDetectionFrame() {
-        if (detecting || !browserPreview.videoWidth || browserPreview.readyState < 2) return;
-        detecting = true;
         try {
-          const viewport = canvas.getBoundingClientRect();
-          const viewportWidth = Math.max(1, Math.floor(viewport.width));
-          const viewportHeight = Math.max(1, Math.floor(viewport.height));
-          const videoWidth = browserPreview.videoWidth;
-          const videoHeight = browserPreview.videoHeight;
-          const viewportRatio = viewportWidth / viewportHeight;
-          const videoRatio = videoWidth / videoHeight;
-          let sx = 0;
-          let sy = 0;
-          let sw = videoWidth;
-          let sh = videoHeight;
-          if (viewportRatio > videoRatio) {
-            sh = videoWidth / viewportRatio;
-            sy = (videoHeight - sh) / 2;
-          } else {
-            sw = videoHeight * viewportRatio;
-            sx = (videoWidth - sw) / 2;
+          await fetch(`/set-detection?enabled=${enabled ? "1" : "0"}`);
+          if (!enabled) {
+            objectStat.textContent = "0";
+            fpsStat.textContent = "-";
+            detectStat.textContent = "-";
           }
-          const config = await getConfig();
-          const detectWidth = Math.min(config.detect_width || 480, viewportWidth);
-          const detectHeight = Math.max(1, Math.round(viewportHeight * (detectWidth / viewportWidth)));
-          detectCanvas.width = detectWidth;
-          detectCanvas.height = detectHeight;
-          detectCtx.drawImage(browserPreview, sx, sy, sw, sh, 0, 0, detectWidth, detectHeight);
-          const blob = await new Promise((resolve) => detectCanvas.toBlob(resolve, "image/jpeg", 0.8));
-          if (!blob) return;
-          const response = await fetch(`/detect-frame?frame=${++detectFrame}&source_width=${viewportWidth}&source_height=${viewportHeight}`, {
-            method: "POST",
-            headers: { "Content-Type": "image/jpeg" },
-            body: blob,
-          });
-          const data = await response.json();
+        } catch (error) {
+          status.textContent = "Detection switch failed.";
+          status.classList.remove("is-hidden");
+        }
+      }
+      function startEvents() {
+        if (eventSource) eventSource.close();
+        eventSource = new EventSource("/events");
+        eventSource.onmessage = (event) => {
+          const data = JSON.parse(event.data);
           latest = data;
           latestDetectionAt = performance.now();
           frameStat.textContent = data.frame || "-";
           objectStat.textContent = (data.objects || []).length;
-          const elapsed = Math.max((performance.now() - detectStarted) / 1000, 0.001);
-          fpsStat.textContent = (detectFrame / elapsed).toFixed(1);
+          fpsStat.textContent = data.process_fps ? Number(data.process_fps).toFixed(1) : "-";
           sizeStat.textContent = data.width && data.height ? `${data.width}x${data.height}` : "-";
           detectStat.textContent = data.detect_ms ? `${data.detect_ms}ms` : "-";
-          status.classList.add("is-hidden");
-        } catch (error) {
-          status.textContent = "Detection request failed.";
+          if (data.status) {
+            status.textContent = data.status;
+            status.classList.remove("is-hidden");
+          } else {
+            status.classList.add("is-hidden");
+          }
+        };
+        eventSource.onerror = () => {
+          status.textContent = "Event stream disconnected.";
           status.classList.remove("is-hidden");
-        } finally {
-          detecting = false;
-        }
+        };
       }
       customClassInput.onchange = updateClasses;
       customClassInput.onkeydown = (event) => {
@@ -552,6 +503,10 @@ HTML_PAGE = """<!doctype html>
       };
       refreshCameras();
       loadClasses();
+      getConfig().then((data) => {
+        detectionToggle.checked = Boolean(data.detection_enabled);
+      });
+      startEvents();
       requestAnimationFrame(draw);
     </script>
   </body>
@@ -1038,11 +993,17 @@ def scan_camera_devices(args, current=None):
 def build_records(result, frame_index, width, height, names):
     records = []
     boxes = result.boxes
-    if boxes is None or boxes.id is None:
+    if boxes is None:
         return records
 
     xyxy = boxes.xyxy.cpu().numpy()
-    ids = boxes.id.cpu().numpy().astype(int)
+    if len(xyxy) == 0:
+        return records
+
+    if boxes.id is None:
+        ids = np.arange(1, len(xyxy) + 1, dtype=int)
+    else:
+        ids = boxes.id.cpu().numpy().astype(int)
     confs = boxes.conf.cpu().numpy()
     classes = boxes.cls.cpu().numpy().astype(int)
 
@@ -1099,6 +1060,17 @@ def draw_records(frame, records):
         color = color_for_id(record["track_id"])
         box = [record["x1"], record["y1"], record["x2"], record["y2"]]
         draw_sticker(frame, record["track_id"], record["class_name"], box, color)
+
+
+def resize_detect_frame(frame, detect_width):
+    if not detect_width or detect_width <= 0:
+        return frame
+    height, width = frame.shape[:2]
+    if width <= detect_width:
+        return frame
+    ratio = detect_width / width
+    detect_height = max(1, int(height * ratio))
+    return cv2.resize(frame, (detect_width, detect_height), interpolation=cv2.INTER_AREA)
 
 
 def publish_preview_frame(state, cap, args, status_text):
@@ -1198,6 +1170,7 @@ def capture_loop(args, state):
     backend = cv2.CAP_ANY
     backend_name = "any"
     cap = cv2.VideoCapture()
+    sync_model = None
     if source == "none":
         state.clear_current_camera()
         state.publish_status("Select a camera from the Cameras panel.")
@@ -1281,13 +1254,48 @@ def capture_loop(args, state):
             height, width = frame.shape[:2]
             brightness = float(frame.mean())
             detection_enabled = state.is_detection_enabled()
+            records = []
+            detect_ms = 0.0
             if not detection_enabled:
                 state.clear_latest_records()
+            elif args.sync_detect:
+                should_detect = not detection_interval or now - last_detection_submit >= detection_interval
+                if should_detect:
+                    if sync_model is None:
+                        state.publish_status("Loading YOLO model...")
+                        sync_model = YOLO(args.model)
+                        print(f"Model loaded: {args.model}", flush=True)
+
+                    detect_frame = resize_detect_frame(frame, args.detect_width)
+                    detect_height, detect_width = detect_frame.shape[:2]
+                    class_ids = state.get_class_ids()
+                    track_kwargs = {
+                        "source": detect_frame,
+                        "classes": class_ids,
+                        "conf": args.conf,
+                        "device": args.device,
+                        "tracker": args.tracker,
+                        "persist": True,
+                        "verbose": False,
+                    }
+                    if args.imgsz:
+                        track_kwargs["imgsz"] = args.imgsz
+
+                    detect_started = time.perf_counter()
+                    result = sync_model.track(**track_kwargs)[0]
+                    detect_ms = round((time.perf_counter() - detect_started) * 1000, 1)
+                    records = build_records(result, frame_index, detect_width, detect_height, sync_model.names)
+                    records = scale_records(records, width, height, detect_width, detect_height)
+                    state.set_latest_records(records)
+                    last_detection_submit = now
+                else:
+                    records, _ = state.get_latest_records()
             else:
                 if not detection_interval or now - last_detection_submit >= detection_interval:
                     state.submit_detection_frame(frame, frame_index, width, height)
                     last_detection_submit = now
-            records, inference_count = state.get_latest_records()
+                records, _ = state.get_latest_records()
+            _, inference_count = state.get_latest_records()
 
             if now - last_stream < preview_interval:
                 continue
@@ -1297,7 +1305,8 @@ def capture_loop(args, state):
                 continue
 
             preview = frame.copy()
-            if args.draw:
+            server_drawn = detection_enabled and args.sync_detect
+            if args.draw or server_drawn:
                 draw_records(preview, records)
             preview = resize_stream_frame(preview, args.stream_width)
             stream_height, stream_width = preview.shape[:2]
@@ -1326,6 +1335,8 @@ def capture_loop(args, state):
                 "stream_width": stream_width,
                 "stream_height": stream_height,
                 "process_fps": inference_count / elapsed,
+                "detect_ms": detect_ms,
+                "server_drawn": server_drawn,
                 "objects": records,
             }
             if brightness < args.black_threshold:
@@ -1541,11 +1552,14 @@ def make_handler(state, args):
             )
 
         def send_config(self):
+            detection_enabled = state.is_detection_enabled()
             self.send_json(
                 {
                     "detect_width": args.detect_width,
                     "max_fps": args.max_fps,
                     "imgsz": args.imgsz,
+                    "sync_detect": args.sync_detect,
+                    "detection_enabled": detection_enabled,
                 }
             )
 
@@ -1625,10 +1639,16 @@ def main():
     parser.add_argument("--width", type=int, default=0, help="Requested camera width. Default keeps camera output.")
     parser.add_argument("--height", type=int, default=0, help="Requested camera height. Default keeps camera output.")
     parser.add_argument(
+        "--auto-resolution",
+        dest="auto_resolution",
+        action="store_true",
+        help="Request a resolution preset when opening a camera.",
+    )
+    parser.add_argument(
         "--no-auto-resolution",
         dest="auto_resolution",
         action="store_false",
-        help="Do not request a resolution preset when opening a camera.",
+        help="Keep camera output resolution. This is the default.",
     )
     parser.add_argument(
         "--resolution-mode",
@@ -1638,11 +1658,17 @@ def main():
     )
     parser.add_argument("--camera-fps", type=float, default=0, help="Requested camera FPS.")
     parser.add_argument("--max-fps", type=float, default=12, help="Limit processed FPS. Default: 12.")
-    parser.add_argument("--detect-width", type=int, default=480, help="Browser frame width sent to detector. Default: 480.")
+    parser.add_argument("--detect-width", type=int, default=480, help="Frame width sent to detector. Default: 480.")
     parser.add_argument("--stream-width", type=int, default=1280, help="Max MJPEG stream width. Use 0 for source width.")
     parser.add_argument("--stream-fps", type=float, default=24, help="MJPEG stream FPS. Default: 24.")
     parser.add_argument("--jpeg-quality", type=int, default=75, help="MJPEG JPEG quality, 1-100. Default: 75.")
     parser.add_argument("--draw", action="store_true", help="Also draw server-side stickers into the MJPEG stream.")
+    parser.add_argument(
+        "--async-detect",
+        dest="sync_detect",
+        action="store_false",
+        help="Use the older async detector path. Faster preview, but boxes can lag behind the frame.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Hide HTTP access logs.")
     parser.add_argument("--auto-sources", type=int, default=6, help="Number of camera indexes to scan for --source auto.")
     parser.add_argument("--startup-frames", type=int, default=45, help="Frames to sample during camera startup/probing.")
@@ -1653,7 +1679,8 @@ def main():
         default=0,
         help="Probe camera indexes from 0 to N-1 and exit.",
     )
-    parser.set_defaults(auto_resolution=True)
+    parser.set_defaults(auto_resolution=False)
+    parser.set_defaults(sync_detect=True)
     args = parser.parse_args()
 
     if args.probe_cameras:

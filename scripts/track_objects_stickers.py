@@ -46,16 +46,25 @@ def draw_sticker(frame, track_id, class_name, box, color):
     x1, y1, x2, y2 = [int(v) for v in box]
     cx = int((x1 + x2) / 2)
     cy = int((y1 + y2) / 2)
+    box_w = max(1, x2 - x1)
+    box_h = max(1, y2 - y1)
+    box_scale = min(box_w, box_h)
+    text_scale = max(0.35, min(0.7, box_scale / 120))
+    thickness = max(1, min(2, int(round(box_scale / 80))))
+    pad_x = max(5, int(round(9 * text_scale / 0.7)))
+    pad_y = max(4, int(round(7 * text_scale / 0.7)))
+    gap = max(3, int(round(10 * text_scale / 0.7)))
+    dot_radius = max(3, min(6, int(round(box_scale / 30))))
 
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
 
     label = f"{class_name.upper()} {track_id}"
-    text_size, baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-    label_w = text_size[0] + 18
-    label_h = text_size[1] + baseline + 14
+    text_size, baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, text_scale, thickness)
+    label_w = text_size[0] + pad_x * 2
+    label_h = text_size[1] + baseline + pad_y * 2
 
     sticker_x = max(0, min(cx - label_w // 2, frame.shape[1] - label_w))
-    sticker_y = max(0, y1 - label_h - 10)
+    sticker_y = max(0, y1 - label_h - gap)
 
     cv2.rectangle(
         frame,
@@ -68,14 +77,14 @@ def draw_sticker(frame, track_id, class_name, box, color):
     cv2.putText(
         frame,
         label,
-        (sticker_x + 9, sticker_y + label_h - baseline - 6),
+        (sticker_x + pad_x, sticker_y + label_h - baseline - pad_y),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
+        text_scale,
         (12, 12, 12),
-        2,
+        thickness,
         cv2.LINE_AA,
     )
-    cv2.circle(frame, (cx, cy), 6, color, -1, cv2.LINE_AA)
+    cv2.circle(frame, (cx, cy), dot_radius, color, -1, cv2.LINE_AA)
 
 
 def color_for_id(track_id):
@@ -240,9 +249,14 @@ def main():
             boxes = result.boxes
             frame_records = []
 
-            if boxes is not None and boxes.id is not None:
+            if boxes is not None:
                 xyxy = boxes.xyxy.cpu().numpy()
-                ids = boxes.id.cpu().numpy().astype(int)
+                if len(xyxy) == 0:
+                    ids = []
+                elif boxes.id is None:
+                    ids = range(1, len(xyxy) + 1)
+                else:
+                    ids = boxes.id.cpu().numpy().astype(int)
                 confs = boxes.conf.cpu().numpy()
                 classes = boxes.cls.cpu().numpy().astype(int)
 

@@ -166,11 +166,12 @@ python scripts\live_track_server.py
 http://127.0.0.1:8765
 ```
 
-当前实时页面使用浏览器原生摄像头预览，不再通过 Python 重新编码视频。页面左上角可以选择摄像头和检测类别。
+当前实时页面默认使用 Python/OpenCV 打开摄像头，通过 `/video` 输出 MJPEG 预览。页面左上角可以选择摄像头和检测类别。
+服务端默认不请求固定摄像头比例，会按摄像头实际输出宽高编码画面，前端保持 `cover` 显示。
 
-`Detection` 开关默认关闭。关闭时只播放摄像头；打开后，浏览器会从当前 cover 视口里截取实际可见区域，缩放后发送给 Python 检测，再把返回的框按视口坐标叠加到本地视频上。
+`Detection` 开关默认关闭。关闭时只播放摄像头；打开后，服务端会对同一帧执行 YOLO 跟踪，把检测框画进 MJPEG 画面再发送给浏览器。
 
-这个架构的目标是让视频播放和 YOLO 检测解耦：视频由浏览器直接播放，检测慢时只影响框更新频率，不应该拖慢视频播放。
+这个同步检测架构的目标是让检测框和显示画面严格对应。代价是检测慢时，实时画面的 FPS 会一起降低。
 
 页面右上角：
 
@@ -188,10 +189,17 @@ python scripts\live_track_server.py --device 0
 python scripts\live_track_server.py --model yolo26n.pt --device 0 --imgsz 480
 ```
 
+如果确实需要强制请求摄像头分辨率，可以显式传入：
+
+```powershell
+python scripts\live_track_server.py --width 1280 --height 720
+python scripts\live_track_server.py --auto-resolution --resolution-mode balanced
+```
+
 检测压力主要由两个参数控制：
 
 ```text
---detect-width  浏览器发给后端的检测图宽度，默认 480
+--detect-width  服务端送进 YOLO 的检测图宽度，默认 480
 --imgsz         YOLO 推理尺寸，越小越快
 ```
 
@@ -207,13 +215,25 @@ python scripts\live_track_server.py --detect-width 416 --imgsz 416
 python scripts\live_track_server.py --detect-width 640 --imgsz 640
 ```
 
+如果实时检测车的精度不够，优先使用 GPU、更大的模型和更高的检测输入尺寸：
+
+```powershell
+python scripts\live_track_server.py --device 0 --classes car --model yolo11s.pt --detect-width 640 --imgsz 640 --conf 0.1
+python scripts\live_track_server.py --device 0 --classes car --model yolo11m.pt --detect-width 960 --imgsz 960 --conf 0.1
+```
+
+这些参数只提高送进 YOLO 的检测图尺寸，不会改变前端 MJPEG 的默认输出宽度。更大的模型和更高的 `--detect-width / --imgsz` 会提高小目标识别机会，但会降低实时 FPS。
+
 实时接口：
 
 ```text
 /             实时预览页面
 /classes      当前类别和可选类别
 /set-classes  更新检测类别
-/detect-frame 浏览器抽帧检测接口
+/set-detection 开关服务端检测
+/video        MJPEG 实时画面
+/events       检测状态和元数据事件流
+/detect-frame 旧版浏览器抽帧检测接口
 /config       前端读取检测参数
 ```
 
@@ -224,6 +244,15 @@ python scripts\live_track_server.py --detect-width 640 --imgsz 640
 3. 在页面里只选择需要的类别。
 4. 用 `--detect-width` 和 `--imgsz` 控制检测速度和精度。
 5. 页面右上角 `Detect` 如果经常超过 200ms，优先降低 `--detect-width` 或 `--imgsz`。
+6. 如果想回到旧的“画面更顺但框可能滞后”的异步检测路径，可以加 `--async-detect`。
+
+精度排查顺序：
+
+1. 确认类别是 `car` 或 `person,car`。
+2. 把 `--detect-width` 和 `--imgsz` 从 480 提到 640。
+3. 把模型从 `yolo11n.pt` 换成 `yolo11s.pt`，仍不够再试 `yolo11m.pt`。
+4. 对小车、远车或暗光场景，尝试 `--conf 0.08` 到 `--conf 0.12`。
+5. 如果检测到了但没有稳定 ID，脚本会先用临时 ID 画框，后续 tracker 分配 ID 后再稳定跟踪。
 
 ## 输出结果
 
