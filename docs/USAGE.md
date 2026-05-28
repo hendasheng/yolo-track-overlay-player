@@ -10,16 +10,34 @@ Windows CPU：
 .\yolo-cpu-env\Scripts\Activate.ps1
 ```
 
+退出：
+
+```powershell
+deactivate
+```
+
 Windows GPU：
 
 ```powershell
 conda activate .\yolo-gpu-env
 ```
 
+退出：
+
+```powershell
+conda deactivate
+```
+
 macOS：
 
 ```bash
 source yolo-cpu-env/bin/activate
+```
+
+退出：
+
+```bash
+deactivate
 ```
 
 ## 离线视频检测
@@ -106,6 +124,28 @@ python scripts\track_objects_stickers.py --progress-every 1
 python scripts\track_objects_stickers.py --progress-every 0
 ```
 
+## 离线视频分割
+
+使用 `*-seg.pt` 模型即可输出分割区域；默认 `--render auto` 会自动选择框或分割。
+
+```powershell
+python scripts\track_objects_stickers.py --model yolo11n-seg.pt --classes person
+```
+
+常用覆盖项：
+
+```powershell
+python scripts\track_objects_stickers.py --model yolo11n-seg.pt --classes person --render both
+python scripts\track_objects_stickers.py --model yolo11n-seg.pt --classes person --mask-alpha 0.5
+```
+
+```text
+--render auto  默认。普通模型画框，分割模型画分割区域
+--render box   强制只画框
+--render mask  强制只画分割区域
+--render both  同时画分割区域、检测框和 ID 贴纸
+```
+
 ## 支持的类别
 
 脚本内置了一些常用别名：
@@ -142,6 +182,16 @@ yolo11s.pt  小模型，比 n 稳
 yolo11m.pt  中模型，精度和速度折中
 yolo11l.pt  大模型，更准更慢
 yolo11x.pt  最大，最慢
+```
+
+分割模型对应使用：
+
+```text
+yolo11n-seg.pt
+yolo11s-seg.pt
+yolo11m-seg.pt
+yolo11l-seg.pt
+yolo11x-seg.pt
 ```
 
 建议顺序：
@@ -293,6 +343,7 @@ color             跟踪颜色，Web 叠加播放器会优先使用
 x1, y1, x2, y2    检测框坐标，单位是原视频像素
 center_x/y        中心点坐标，单位是原视频像素
 center_x/y_norm   归一化中心点，范围 0-1
+mask_polygon      分割轮廓点。只有使用分割模型并生成 mask 时才有值
 ```
 
 `tracks.jsonl` 是一行一帧：

@@ -42,7 +42,7 @@ def pick_default_video(root: Path) -> Path:
     return videos[0]
 
 
-def draw_sticker(frame, track_id, class_name, box, color):
+def draw_sticker(frame, track_id, class_name, box, color, draw_box=True):
     x1, y1, x2, y2 = [int(v) for v in box]
     cx = int((x1 + x2) / 2)
     cy = int((y1 + y2) / 2)
@@ -56,7 +56,8 @@ def draw_sticker(frame, track_id, class_name, box, color):
     gap = max(3, int(round(10 * text_scale / 0.7)))
     dot_radius = max(3, min(6, int(round(box_scale / 30))))
 
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
+    if draw_box:
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
 
     label = f"{class_name.upper()} {track_id}"
     text_size, baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, text_scale, thickness)
@@ -85,6 +86,17 @@ def draw_sticker(frame, track_id, class_name, box, color):
         cv2.LINE_AA,
     )
     cv2.circle(frame, (cx, cy), dot_radius, color, -1, cv2.LINE_AA)
+
+
+def draw_mask(frame, polygon, color, alpha=0.35):
+    if polygon is None or len(polygon) < 3:
+        return
+
+    points = polygon.astype("int32").reshape((-1, 1, 2))
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [points], color, cv2.LINE_AA)
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+    cv2.polylines(frame, [points], True, color, 2, cv2.LINE_AA)
 
 
 def color_for_id(track_id):
@@ -163,12 +175,25 @@ def main():
     parser.add_argument("--show", action="store_true", help="Preview while processing.")
     parser.add_argument("--out-dir", type=Path, default=Path("runs"))
     parser.add_argument(
+        "--render",
+        choices=["auto", "box", "mask", "both"],
+        default="auto",
+        help="Overlay style: auto draws masks when available, box draws boxes, mask draws masks, both draws both.",
+    )
+    parser.add_argument(
+        "--mask-alpha",
+        type=float,
+        default=0.35,
+        help="Mask opacity for --render mask/both.",
+    )
+    parser.add_argument(
         "--progress-every",
         type=int,
         default=10,
         help="Print progress every N frames. Use 0 to disable.",
     )
     args = parser.parse_args()
+    args.mask_alpha = max(0.0, min(1.0, args.mask_alpha))
 
     root = Path.cwd()
     source = args.source if args.source else pick_default_video(root)
@@ -235,6 +260,7 @@ def main():
         "center_y",
         "center_x_norm",
         "center_y_norm",
+        "mask_polygon",
     ]
 
     with out_jsonl.open("w", encoding="utf-8") as jf, out_csv.open(
@@ -244,9 +270,17 @@ def main():
         csv_writer.writeheader()
 
         start_time = perf_counter()
+        warned_missing_masks = False
         for frame_index, result in enumerate(results, start=1):
             frame = result.orig_img.copy()
             boxes = result.boxes
+            masks = getattr(result, "masks", None)
+            mask_polygons = masks.xy if masks is not None else None
+            if args.render in ("mask", "both") and mask_polygons is None and not warned_missing_masks:
+                print(
+                    "Warning: no segmentation masks found. Use a *-seg.pt model for mask rendering."
+                )
+                warned_missing_masks = True
             frame_records = []
 
             if boxes is not None:
@@ -260,14 +294,37 @@ def main():
                 confs = boxes.conf.cpu().numpy()
                 classes = boxes.cls.cpu().numpy().astype(int)
 
-                for box, track_id, conf, cls in zip(xyxy, ids, confs, classes):
+                for object_index, (box, track_id, conf, cls) in enumerate(
+                    zip(xyxy, ids, confs, classes)
+                ):
                     x1, y1, x2, y2 = [float(v) for v in box]
                     cx = (x1 + x2) / 2
                     cy = (y1 + y2) / 2
                     color = color_for_id(track_id)
                     color_hex = bgr_to_hex(color)
                     object_name = model.names.get(int(cls), str(cls))
-                    draw_sticker(frame, track_id, object_name, box, color)
+                    polygon = (
+                        mask_polygons[object_index]
+                        if mask_polygons is not None and object_index < len(mask_polygons)
+                        else None
+                    )
+                    render_mode = args.render
+                    if render_mode == "auto":
+                        render_mode = "mask" if polygon is not None else "box"
+
+                    if render_mode in ("mask", "both"):
+                        draw_mask(frame, polygon, color, args.mask_alpha)
+                    if render_mode in ("box", "both"):
+                        draw_sticker(frame, track_id, object_name, box, color)
+                    elif render_mode == "mask":
+                        draw_sticker(
+                            frame,
+                            track_id,
+                            object_name,
+                            box,
+                            color,
+                            draw_box=polygon is None,
+                        )
 
                     record = {
                         "frame": frame_index,
@@ -284,7 +341,12 @@ def main():
                         "center_y": round(cy, 2),
                         "center_x_norm": round(cx / width, 6),
                         "center_y_norm": round(cy / height, 6),
+                        "mask_polygon": "",
                     }
+                    if polygon is not None:
+                        record["mask_polygon"] = [
+                            [round(float(x), 2), round(float(y), 2)] for x, y in polygon
+                        ]
                     frame_records.append(record)
                     csv_writer.writerow(record)
 

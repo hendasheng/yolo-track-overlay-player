@@ -5,10 +5,11 @@
 主要用途：
 
 1. 用 YOLO 检测并跟踪人、车、鸟等目标。
-2. 输出带贴纸的视频，方便检查识别效果。
-3. 输出 `CSV / JSONL` 数据，方便前端、MIDI、TouchDesigner 或其他视觉系统使用。
-4. 启动实时摄像头检测页面，在浏览器里选择摄像头和检测类别，同帧输出检测画面。
-5. 用前端播放器加载原视频和跟踪数据，验证图形叠加是否准确。
+2. 使用 `*-seg.pt` 分割模型输出分割区域，普通检测模型仍输出检测框。
+3. 输出带贴纸的视频，方便检查识别效果。
+4. 输出 `CSV / JSONL` 数据，方便前端、MIDI、TouchDesigner 或其他视觉系统使用。
+5. 启动实时摄像头检测页面，在浏览器里选择摄像头和检测类别，同帧输出检测画面。
+6. 用前端播放器加载原视频和跟踪数据，验证图形叠加是否准确。
 
 ## 目录结构
 
@@ -78,6 +79,12 @@ python -c "from ultralytics import YOLO; import cv2; import torch; print('ok'); 
 
 CPU 环境看到 `False` 是正常的。
 
+退出 CPU 环境：
+
+```powershell
+deactivate
+```
+
 ### Windows NVIDIA GPU
 
 适合 NVIDIA CUDA 显卡。推荐用 conda 创建 Python 3.11 环境，避免 CUDA 版 PyTorch 和 Python 版本不匹配。
@@ -112,6 +119,12 @@ python -c "from ultralytics import YOLO; import torch; print(torch.cuda.is_avail
 
 如果输出 `True` 和显卡名称，GPU 环境可用。
 
+退出 GPU 环境：
+
+```powershell
+conda deactivate
+```
+
 ### macOS
 
 macOS 默认按 CPU 环境使用。Intel Mac 没有 CUDA，Apple Silicon 的 `mps` 后端兼容性不如 CUDA 稳定，不作为默认安装方式。
@@ -135,6 +148,12 @@ pip install -r requirements-cpu.txt
 python -c "from ultralytics import YOLO; import cv2; import torch; print('ok'); print(torch.cuda.is_available())"
 ```
 
+退出 macOS 环境：
+
+```bash
+deactivate
+```
+
 Apple Silicon 用户可以自行尝试 `mps`：
 
 ```bash
@@ -149,6 +168,12 @@ python -c "import torch; print(torch.backends.mps.is_available() if hasattr(torc
 
 ```powershell
 python scripts\track_objects_stickers.py
+```
+
+离线分割视频：
+
+```powershell
+python scripts\track_objects_stickers.py --model yolo11n-seg.pt --classes person
 ```
 
 实时摄像头检测：
