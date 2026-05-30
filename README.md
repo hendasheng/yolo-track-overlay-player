@@ -1,6 +1,8 @@
 # YOLO Track Overlay Player
 
-本项目用于把视频或摄像头画面里的目标检测/跟踪结果导出成数据，并用前端页面把这些数据叠加回原视频或实时画面。
+本项目用于把视频里的目标检测/跟踪结果导出成数据，并用前端页面把这些数据叠加回原视频。
+
+实时摄像头检测已迁移到独立的 `rfdetr-live` 项目。
 
 主要用途：
 
@@ -8,8 +10,7 @@
 2. 使用 `*-seg.pt` 分割模型输出分割区域，普通检测模型仍输出检测框。
 3. 输出带贴纸的视频，方便检查识别效果。
 4. 输出 `CSV / JSONL` 数据，方便前端、MIDI、TouchDesigner 或其他视觉系统使用。
-5. 启动实时摄像头检测页面，在浏览器里选择摄像头和检测类别，同帧输出检测画面。
-6. 用前端播放器加载原视频和跟踪数据，验证图形叠加是否准确。
+5. 用前端播放器加载原视频和跟踪数据，验证图形叠加是否准确。
 
 ## 目录结构
 
@@ -19,7 +20,6 @@ yolo-track-overlay-player/
   runs/                      每次运行生成的结果
   scripts/
     track_objects_stickers.py  离线 YOLO 跟踪、贴纸、数据导出脚本
-    live_track_server.py       实时摄像头检测服务
   web_track_overlay_player/  前端跟踪数据叠加播放器
   docs/USAGE.md              详细使用文档，可作为 Wiki 页面源稿
   README.md                  项目简介和安装
@@ -174,26 +174,6 @@ python scripts\track_objects_stickers.py
 
 ```powershell
 python scripts\track_objects_stickers.py --model yolo11n-seg.pt --classes person
-```
-
-实时摄像头检测：
-
-```powershell
-python scripts\live_track_server.py
-```
-
-打开实时页面：
-
-```text
-http://127.0.0.1:8765
-```
-
-实时页面默认由服务端打开摄像头，并把 YOLO 检测框画进同一帧 MJPEG 画面，优先保证框和画面对齐。
-
-实时检测精度优先示例：
-
-```powershell
-python scripts\live_track_server.py --device 0 --classes car --model yolo11s.pt --detect-width 640 --imgsz 640 --conf 0.1
 ```
 
 前端离线叠加播放器：

@@ -9,6 +9,7 @@ Purpose:
 - Local YOLO object detection/tracking validation.
 - Export per-frame tracking data.
 - Preview visual overlays in a small browser player.
+- Keep live camera detection in the separate `rfdetr-live` project.
 - Keep this separate from the older OpenCV.js contour-detection project.
 
 ## Environment Policy

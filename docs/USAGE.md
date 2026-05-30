@@ -2,6 +2,8 @@
 
 本文档记录项目的详细使用方式，可作为 GitHub Wiki 页面源稿。
 
+实时摄像头检测已迁移到独立的 `rfdetr-live` 项目。当前仓库只保留 YOLO 离线处理与前端叠加播放器。
+
 ## 环境激活
 
 Windows CPU：
@@ -201,110 +203,6 @@ n -> s -> m -> l -> x
 ```
 
 CPU 环境建议用 `n / s`。GPU 环境可以尝试 `m / l / x`。
-
-## 实时摄像头检测
-
-启动实时服务：
-
-```powershell
-python scripts\live_track_server.py
-```
-
-打开：
-
-```text
-http://127.0.0.1:8765
-```
-
-当前实时页面默认使用 Python/OpenCV 打开摄像头，通过 `/video` 输出 MJPEG 预览。页面左上角可以选择摄像头和检测类别。
-服务端默认不请求固定摄像头比例，会按摄像头实际输出宽高编码画面，前端保持 `cover` 显示。
-
-`Detection` 开关默认关闭。关闭时只播放摄像头；打开后，服务端会对同一帧执行 YOLO 跟踪，把检测框画进 MJPEG 画面再发送给浏览器。
-
-这个同步检测架构的目标是让检测框和显示画面严格对应。代价是检测慢时，实时画面的 FPS 会一起降低。
-
-当前实时检测方案已经可以用于现场状态、走位测试和参数调试：能在浏览器里选择摄像头、切换类别，并看到同帧输出的检测画面。但它还不是最终满意的状态。现阶段仍需要根据现场距离、光线、摄像头分辨率和显卡性能调 `--model`、`--detect-width`、`--imgsz`、`--conf`；如果要长期稳定运行或追求更高实时精度，后续应继续评估 TensorRT/ONNX 加速、更高分辨率检测输入、低频检测加高频跟踪等优化。
-
-页面右上角：
-
-```text
-Size    摄像头实际采集分辨率
-FPS     检测请求返回频率，不是视频播放帧率
-Detect  单次后端检测耗时
-```
-
-常用启动方式：
-
-```powershell
-python scripts\live_track_server.py
-python scripts\live_track_server.py --device 0
-python scripts\live_track_server.py --model yolo26n.pt --device 0 --imgsz 480
-```
-
-如果确实需要强制请求摄像头分辨率，可以显式传入：
-
-```powershell
-python scripts\live_track_server.py --width 1280 --height 720
-python scripts\live_track_server.py --auto-resolution --resolution-mode balanced
-```
-
-检测压力主要由两个参数控制：
-
-```text
---detect-width  服务端送进 YOLO 的检测图宽度，默认 480
---imgsz         YOLO 推理尺寸，越小越快
-```
-
-如果框更新明显滞后，优先降低检测图宽度和推理尺寸：
-
-```powershell
-python scripts\live_track_server.py --detect-width 416 --imgsz 416
-```
-
-如果要更准一些：
-
-```powershell
-python scripts\live_track_server.py --detect-width 640 --imgsz 640
-```
-
-如果实时检测车的精度不够，优先使用 GPU、更大的模型和更高的检测输入尺寸：
-
-```powershell
-python scripts\live_track_server.py --device 0 --classes car --model yolo11s.pt --detect-width 640 --imgsz 640 --conf 0.1
-python scripts\live_track_server.py --device 0 --classes car --model yolo11m.pt --detect-width 960 --imgsz 960 --conf 0.1
-```
-
-这些参数只提高送进 YOLO 的检测图尺寸，不会改变前端 MJPEG 的默认输出宽度。更大的模型和更高的 `--detect-width / --imgsz` 会提高小目标识别机会，但会降低实时 FPS。
-
-实时接口：
-
-```text
-/             实时预览页面
-/classes      当前类别和可选类别
-/set-classes  更新检测类别
-/set-detection 开关服务端检测
-/video        MJPEG 实时画面
-/events       检测状态和元数据事件流
-/detect-frame 旧版浏览器抽帧检测接口
-/config       前端读取检测参数
-```
-
-性能建议：
-
-1. NVIDIA 显卡优先使用 `--device 0`。
-2. 先用 `yolo11n.pt` 或 `yolo26n.pt`，稳定后再换 `s / m`。
-3. 在页面里只选择需要的类别。
-4. 用 `--detect-width` 和 `--imgsz` 控制检测速度和精度。
-5. 页面右上角 `Detect` 如果经常超过 200ms，优先降低 `--detect-width` 或 `--imgsz`。
-6. 如果想回到旧的“画面更顺但框可能滞后”的异步检测路径，可以加 `--async-detect`。
-
-精度排查顺序：
-
-1. 确认类别是 `car` 或 `person,car`。
-2. 把 `--detect-width` 和 `--imgsz` 从 480 提到 640。
-3. 把模型从 `yolo11n.pt` 换成 `yolo11s.pt`，仍不够再试 `yolo11m.pt`。
-4. 对小车、远车或暗光场景，尝试 `--conf 0.08` 到 `--conf 0.12`。
-5. 如果检测到了但没有稳定 ID，脚本会先用临时 ID 画框，后续 tracker 分配 ID 后再稳定跟踪。
 
 ## 输出结果
 
