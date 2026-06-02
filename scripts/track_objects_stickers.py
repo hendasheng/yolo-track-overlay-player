@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import shutil
 from pathlib import Path
 from datetime import datetime
 from time import perf_counter
@@ -213,6 +214,7 @@ def main():
     run_dir = args.out_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=False)
     source_name = safe_name(source.stem)
+    original_video = run_dir / source.name
     out_video = run_dir / f"{source_name}_stickers.mp4"
     out_jsonl = run_dir / f"{source_name}_tracks.jsonl"
     out_csv = run_dir / f"{source_name}_tracks.csv"
@@ -226,6 +228,7 @@ def main():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     cap.release()
+    shutil.copy2(source, original_video)
 
     writer = cv2.VideoWriter(
         str(out_video),
@@ -377,6 +380,7 @@ def main():
     cv2.destroyAllWindows()
     print()
 
+    print(f"Original: {original_video}")
     print(f"Video: {out_video}")
     print(f"JSONL: {out_jsonl}")
     print(f"CSV: {out_csv}")

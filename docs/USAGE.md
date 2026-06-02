@@ -212,6 +212,7 @@ CPU 环境建议用 `n / s`。GPU 环境可以尝试 `m / l / x`。
 
 ```text
 runs/yolo11m_person_gpu_conf0p15_20260521_180000/
+  your_video.mp4
   your_video_stickers.mp4
   your_video_tracks.csv
   your_video_tracks.jsonl
@@ -220,6 +221,7 @@ runs/yolo11m_person_gpu_conf0p15_20260521_180000/
 文件说明：
 
 ```text
+your_video.mp4    原始视频副本，文件名与输入文件一致
 *_stickers.mp4   带检测框和贴纸的视频
 *_tracks.csv     表格数据，适合 Excel / WPS 查看
 *_tracks.jsonl   逐帧 JSON 数据，适合程序读取

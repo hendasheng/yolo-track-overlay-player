@@ -39,12 +39,14 @@ Behavior:
 - Supports `--device`, e.g. `cpu`, `0`, `mps`.
 - Outputs one run folder per execution under `runs/`.
 - Run folder name includes model, class label, device label, confidence, timestamp.
-- Output files include the source stem.
+- Copies the original video into the run folder using its original filename.
+- Generated output files include the source stem.
 
 Output example:
 
 ```text
 runs/yolo11m_person_gpu_conf0p15_20260521_180000/
+  input_video.mp4
   input_video_stickers.mp4
   input_video_tracks.csv
   input_video_tracks.jsonl
