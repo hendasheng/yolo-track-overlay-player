@@ -1,6 +1,6 @@
 # Local environments
-yolo-cpu-env/
-yolo-gpu-env/
+video-track-cpu-env/
+video-track-gpu-env/
 .venv/
 venv/
 env/
@@ -12,6 +12,7 @@ source/*
 
 # Model weights
 *.pt
+*.pth
 *.onnx
 *.engine
 

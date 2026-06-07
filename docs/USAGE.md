@@ -9,7 +9,7 @@
 Windows CPU：
 
 ```powershell
-.\yolo-cpu-env\Scripts\Activate.ps1
+.\video-track-cpu-env\Scripts\Activate.ps1
 ```
 
 退出：
@@ -21,7 +21,7 @@ deactivate
 Windows GPU：
 
 ```powershell
-conda activate .\yolo-gpu-env
+conda activate .\video-track-gpu-env
 ```
 
 退出：
@@ -33,7 +33,7 @@ conda deactivate
 macOS：
 
 ```bash
-source yolo-cpu-env/bin/activate
+source video-track-cpu-env/bin/activate
 ```
 
 退出：
@@ -62,6 +62,19 @@ python scripts\track_objects_rfdetr.py --classes car
 
 ```powershell
 python scripts\track_objects_rfdetr.py --classes person
+```
+
+分割人像：
+
+```powershell
+python scripts\track_objects_rfdetr.py --model-size seg-small --classes person --device cuda
+```
+
+同时画分割区域和检测框：
+
+```powershell
+python scripts\track_objects_rfdetr.py --model-size seg-small --classes person --device cuda --render both
+python scripts\track_objects_rfdetr.py --model-size seg-small --classes person --device cuda --mask-alpha 0.5
 ```
 
 RF-DETR 预训练 COCO 模型使用 COCO 原始 category ID，不是 YOLO 的 0-79 连续编号。常用类别：
@@ -139,11 +152,15 @@ nano
 small
 medium
 large
+seg-nano
+seg-small
+seg-medium
+seg-large
 ```
 
 这些默认档位对应 RF-DETR 的 Apache 2.0 开源模型线。不要把 `plus` / XL / 2XLarge 模型混进当前脚本，除非你明确接受对应的额外许可条款。
 
-RF-DETR 当前只输出检测框；`mask_polygon` 字段会保持为空。
+普通 RF-DETR 档位输出检测框；`seg-*` 档位输出检测框和实例分割 mask。默认 `--render auto` 会在 mask 可用时画分割区域，`mask_polygon` 字段也会写入分割轮廓。
 
 ## YOLO 离线视频检测
 
@@ -227,6 +244,12 @@ python scripts\track_objects_yolo.py --progress-every 1
 
 ```powershell
 python scripts\track_objects_yolo.py --progress-every 0
+
+只跑前几帧做验证：
+
+```powershell
+python scripts\track_objects_yolo.py --classes person --device 0 --max-frames 3 --progress-every 1
+```
 ```
 
 ## 离线视频分割
@@ -371,14 +394,14 @@ Windows：
 
 ```powershell
 cd web_track_overlay_player
-..\yolo-cpu-env\Scripts\python.exe -m http.server 8090 --bind 127.0.0.1
+..\video-track-cpu-env\Scripts\python.exe -m http.server 8090 --bind 127.0.0.1
 ```
 
 macOS：
 
 ```bash
 cd web_track_overlay_player
-../yolo-cpu-env/bin/python -m http.server 8090 --bind 127.0.0.1
+../video-track-cpu-env/bin/python -m http.server 8090 --bind 127.0.0.1
 ```
 
 打开：

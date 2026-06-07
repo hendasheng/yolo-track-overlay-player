@@ -193,6 +193,12 @@ def main():
         default=10,
         help="Print progress every N frames. Use 0 to disable.",
     )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=0,
+        help="Stop after N frames. Use 0 to process the full video.",
+    )
     args = parser.parse_args()
     args.mask_alpha = max(0.0, min(1.0, args.mask_alpha))
 
@@ -375,6 +381,9 @@ def main():
                 cv2.imshow("car stickers", frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
+
+            if args.max_frames and frame_index >= args.max_frames:
+                break
 
     writer.release()
     cv2.destroyAllWindows()

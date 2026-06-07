@@ -119,6 +119,10 @@ RFDETR_MODEL_CLASSES = {
     "small": "RFDETRSmall",
     "medium": "RFDETRMedium",
     "large": "RFDETRLarge",
+    "seg-nano": "RFDETRSegNano",
+    "seg-small": "RFDETRSegSmall",
+    "seg-medium": "RFDETRSegMedium",
+    "seg-large": "RFDETRSegLarge",
 }
 
 
@@ -177,6 +181,62 @@ def draw_sticker(frame, track_id, class_name, box, color, draw_box=True):
         cv2.LINE_AA,
     )
     cv2.circle(frame, (cx, cy), dot_radius, color, -1, cv2.LINE_AA)
+
+
+def normalize_mask(mask, frame_shape):
+    if mask is None:
+        return None
+
+    mask = np.asarray(mask)
+    mask = np.squeeze(mask)
+    if mask.ndim != 2:
+        return None
+
+    height, width = frame_shape[:2]
+    if mask.shape != (height, width):
+        mask = cv2.resize(mask.astype("float32"), (width, height), interpolation=cv2.INTER_LINEAR)
+
+    if mask.dtype == np.bool_:
+        return mask
+    return mask > 0.5
+
+
+def mask_to_polygon(mask):
+    if mask is None or not np.any(mask):
+        return ""
+
+    contours, _ = cv2.findContours(
+        mask.astype("uint8"), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return ""
+
+    contour = max(contours, key=cv2.contourArea)
+    if len(contour) < 3:
+        return ""
+
+    epsilon = max(1.0, 0.0025 * cv2.arcLength(contour, True))
+    polygon = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2)
+    return [[round(float(x), 2), round(float(y), 2)] for x, y in polygon]
+
+
+def draw_mask(frame, mask, color, alpha=0.35):
+    if mask is None or not np.any(mask):
+        return
+
+    overlay = frame.copy()
+    overlay[mask] = color
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+    contours, _ = cv2.findContours(
+        mask.astype("uint8"), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if contours:
+        cv2.drawContours(frame, contours, -1, color, 2, cv2.LINE_AA)
+
+
+def is_segmentation_model(size):
+    return size.startswith("seg-")
 
 
 def color_for_id(track_id):
@@ -293,7 +353,7 @@ def main():
         "--model-size",
         choices=sorted(RFDETR_MODEL_CLASSES),
         default="medium",
-        help="RF-DETR model size. These default options use the Apache 2.0 model line.",
+        help="RF-DETR model size. Use seg-* options for instance segmentation.",
     )
     parser.add_argument(
         "--classes",
@@ -306,6 +366,18 @@ def main():
         type=float,
         default=0.5,
         help="IoU threshold for duplicate-box suppression. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--render",
+        choices=["auto", "box", "mask", "both"],
+        default="auto",
+        help="Overlay style: auto draws masks when available, box draws boxes, mask draws masks, both draws both.",
+    )
+    parser.add_argument(
+        "--mask-alpha",
+        type=float,
+        default=0.35,
+        help="Mask opacity for --render mask/both.",
     )
     parser.add_argument(
         "--device",
@@ -338,6 +410,7 @@ def main():
         help="Stop after N frames. Use 0 to process the full video.",
     )
     args = parser.parse_args()
+    args.mask_alpha = max(0.0, min(1.0, args.mask_alpha))
 
     root = Path.cwd()
     source = args.source if args.source else pick_default_video(root)
@@ -444,6 +517,7 @@ def main():
             confidences = getattr(detections, "confidence", None)
             detected_classes = getattr(detections, "class_id", None)
             tracker_ids = getattr(detections, "tracker_id", None)
+            detection_masks = getattr(detections, "mask", None)
             if confidences is None:
                 confidences = np.ones(len(xyxy), dtype=float)
             if detected_classes is None:
@@ -451,8 +525,8 @@ def main():
             if tracker_ids is None:
                 tracker_ids = np.arange(1, len(xyxy) + 1)
 
-            for box, track_id, conf, cls in zip(
-                xyxy, tracker_ids, confidences, detected_classes
+            for object_index, (box, track_id, conf, cls) in enumerate(
+                zip(xyxy, tracker_ids, confidences, detected_classes)
             ):
                 if track_id is None:
                     continue
@@ -462,7 +536,27 @@ def main():
                 color = color_for_id(track_id)
                 color_hex = bgr_to_hex(color)
                 object_name = COCO_NAMES.get(int(cls), str(cls))
-                draw_sticker(frame, int(track_id), object_name, box, color)
+                mask = None
+                if detection_masks is not None and object_index < len(detection_masks):
+                    mask = normalize_mask(detection_masks[object_index], frame.shape)
+
+                render_mode = args.render
+                if render_mode == "auto":
+                    render_mode = "mask" if mask is not None else "box"
+
+                if render_mode in ("mask", "both"):
+                    draw_mask(frame, mask, color, args.mask_alpha)
+                if render_mode in ("box", "both"):
+                    draw_sticker(frame, int(track_id), object_name, box, color)
+                elif render_mode == "mask":
+                    draw_sticker(
+                        frame,
+                        int(track_id),
+                        object_name,
+                        box,
+                        color,
+                        draw_box=mask is None,
+                    )
 
                 record = {
                     "frame": frame_index,
@@ -481,6 +575,9 @@ def main():
                     "center_y_norm": round(cy / height, 6),
                     "mask_polygon": "",
                 }
+                polygon = mask_to_polygon(mask)
+                if polygon:
+                    record["mask_polygon"] = polygon
                 frame_records.append(record)
                 csv_writer.writerow(record)
 

@@ -18,8 +18,8 @@ Do not document machine-specific local paths, installed models, or GPU hardware 
 
 Recommended local environments:
 
-- `yolo-cpu-env`: local CPU fallback, usually created with `venv`.
-- `yolo-gpu-env`: local NVIDIA CUDA environment, usually created with `conda` and Python 3.11.
+- `video-track-cpu-env`: local CPU fallback, usually created with `venv`.
+- `video-track-gpu-env`: local NVIDIA CUDA environment, usually created with `conda` and Python 3.11.
 
 These environment folders must be ignored by Git.
 

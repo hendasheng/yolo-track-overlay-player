@@ -33,10 +33,10 @@ video-track-overlay-player/
 建议按用途选择 CPU 或 GPU 环境。
 
 ```text
-yolo-cpu-env
+video-track-cpu-env
   CPU 环境，适合通用测试和兜底
 
-yolo-gpu-env
+video-track-gpu-env
   GPU 环境，适合 NVIDIA CUDA 显卡
 ```
 
@@ -56,15 +56,15 @@ PowerShell
 创建并激活环境：
 
 ```powershell
-python -m venv yolo-cpu-env
-.\yolo-cpu-env\Scripts\Activate.ps1
+python -m venv video-track-cpu-env
+.\video-track-cpu-env\Scripts\Activate.ps1
 ```
 
 如果 PowerShell 拦截激活脚本：
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\yolo-cpu-env\Scripts\Activate.ps1
+.\video-track-cpu-env\Scripts\Activate.ps1
 ```
 
 安装依赖：
@@ -101,8 +101,8 @@ NVIDIA 显卡驱动已安装
 创建并激活环境：
 
 ```powershell
-conda create -p .\yolo-gpu-env python=3.11 -y
-conda activate .\yolo-gpu-env
+conda create -p .\video-track-gpu-env python=3.11 -y
+conda activate .\video-track-gpu-env
 ```
 
 安装 CUDA 版 PyTorch 和项目依赖：
@@ -140,8 +140,8 @@ macOS 默认按 CPU 环境使用。Intel Mac 没有 CUDA，Apple Silicon 的 `mp
 创建并激活环境：
 
 ```bash
-python3 -m venv yolo-cpu-env
-source yolo-cpu-env/bin/activate
+python3 -m venv video-track-cpu-env
+source video-track-cpu-env/bin/activate
 ```
 
 安装依赖：
@@ -178,6 +178,12 @@ RF-DETR 离线处理视频：
 python scripts\track_objects_rfdetr.py --classes car --device cuda
 ```
 
+RF-DETR 离线分割视频：
+
+```powershell
+python scripts\track_objects_rfdetr.py --model-size seg-small --classes person --device cuda
+```
+
 YOLO 离线处理视频：
 
 ```powershell
@@ -194,7 +200,7 @@ python scripts\track_objects_yolo.py --model yolo11n-seg.pt --classes person
 
 ```powershell
 cd web_track_overlay_player
-..\yolo-cpu-env\Scripts\python.exe -m http.server 8090 --bind 127.0.0.1
+..\video-track-cpu-env\Scripts\python.exe -m http.server 8090 --bind 127.0.0.1
 ```
 
 打开：
