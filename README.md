@@ -1,4 +1,4 @@
-# YOLO Track Overlay Player
+# Video Track Overlay Player
 
 本项目用于把视频里的目标检测/跟踪结果导出成数据，并用前端页面把这些数据叠加回原视频。
 
@@ -6,8 +6,8 @@
 
 主要用途：
 
-1. 用 YOLO 检测并跟踪人、车、鸟等目标。
-2. 使用 `*-seg.pt` 分割模型输出分割区域，普通检测模型仍输出检测框。
+1. 用 RF-DETR 或 YOLO 离线检测并跟踪人、车、鸟等目标。
+2. RF-DETR 输出检测框；YOLO `*-seg.pt` 分割模型可输出分割区域。
 3. 输出带贴纸的视频，方便检查识别效果。
 4. 将原视频副本保存在同一个运行目录，方便整理和对照。
 5. 输出 `CSV / JSONL` 数据，方便前端、MIDI、TouchDesigner 或其他视觉系统使用。
@@ -16,11 +16,12 @@
 ## 目录结构
 
 ```text
-yolo-track-overlay-player/
+video-track-overlay-player/
   source/                    放待检测的原视频
   runs/                      每次运行生成的结果
   scripts/
-    track_objects_stickers.py  离线 YOLO 跟踪、贴纸、数据导出脚本
+    track_objects_rfdetr.py    离线 RF-DETR 跟踪、贴纸、数据导出脚本
+    track_objects_yolo.py      离线 YOLO 跟踪、贴纸、数据导出脚本
   web_track_overlay_player/  前端跟踪数据叠加播放器
   docs/USAGE.md              详细使用文档，可作为 Wiki 页面源稿
   README.md                  项目简介和安装
@@ -112,6 +113,12 @@ pip install -r requirements-gpu-cu121.txt -i https://pypi.tuna.tsinghua.edu.cn/s
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
+如果使用 RF-DETR 离线检测，再安装：
+
+```powershell
+pip install -r requirements-rfdetr.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
 验证 GPU：
 
 ```powershell
@@ -165,16 +172,22 @@ python -c "import torch; print(torch.backends.mps.is_available() if hasattr(torc
 
 详细用法见 [docs/USAGE.md](docs/USAGE.md)。
 
-离线处理视频：
+RF-DETR 离线处理视频：
 
 ```powershell
-python scripts\track_objects_stickers.py
+python scripts\track_objects_rfdetr.py --classes car --device cuda
+```
+
+YOLO 离线处理视频：
+
+```powershell
+python scripts\track_objects_yolo.py
 ```
 
 离线分割视频：
 
 ```powershell
-python scripts\track_objects_stickers.py --model yolo11n-seg.pt --classes person
+python scripts\track_objects_yolo.py --model yolo11n-seg.pt --classes person
 ```
 
 前端离线叠加播放器：

@@ -6,7 +6,7 @@ This document is for future AI/Codex sessions. The user-facing README is intenti
 
 Purpose:
 
-- Local YOLO object detection/tracking validation.
+- Local RF-DETR and YOLO object detection/tracking validation.
 - Export per-frame tracking data.
 - Preview visual overlays in a small browser player.
 - Keep live camera detection in the separate `rfdetr-live` project.
@@ -26,16 +26,20 @@ These environment folders must be ignored by Git.
 ## Main Script
 
 ```text
-scripts/track_objects_stickers.py
+scripts/track_objects_rfdetr.py
+scripts/track_objects_yolo.py
 ```
 
 Behavior:
 
 - Defaults to newest `.mp4` inside `source/`.
-- Uses `YOLO(...).track(...)`, not `predict(...)`.
+- YOLO script uses `YOLO(...).track(...)`, not `predict(...)`.
+- RF-DETR script uses `model.predict(...)` per frame and `supervision.ByteTrack` for track IDs.
 - Default model is `yolo11n.pt`.
+- Default RF-DETR size is `medium`.
 - Default class is `car`.
 - Default confidence is `0.15`.
+- Default RF-DETR confidence is `0.35`.
 - Supports `--device`, e.g. `cpu`, `0`, `mps`.
 - Outputs one run folder per execution under `runs/`.
 - Run folder name includes model, class label, device label, confidence, timestamp.

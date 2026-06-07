@@ -2,7 +2,7 @@
 
 本文档记录项目的详细使用方式，可作为 GitHub Wiki 页面源稿。
 
-实时摄像头检测已迁移到独立的 `rfdetr-live` 项目。当前仓库只保留 YOLO 离线处理与前端叠加播放器。
+实时摄像头检测已迁移到独立的 `rfdetr-live` 项目。当前仓库保留离线视频检测、跟踪数据导出与前端叠加播放器。
 
 ## 环境激活
 
@@ -42,12 +42,115 @@ source yolo-cpu-env/bin/activate
 deactivate
 ```
 
-## 离线视频检测
+## RF-DETR 离线视频检测
+
+推荐用于规避 YOLO / Ultralytics 许可证约束的离线检测流程。默认使用 RF-DETR Medium，输出格式和 YOLO 脚本一致，可以继续用同一个前端叠加播放器。
+
+安装依赖：
+
+```powershell
+pip install -r requirements-rfdetr.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+检测车辆：
+
+```powershell
+python scripts\track_objects_rfdetr.py --classes car
+```
+
+检测人：
+
+```powershell
+python scripts\track_objects_rfdetr.py --classes person
+```
+
+RF-DETR 预训练 COCO 模型使用 COCO 原始 category ID，不是 YOLO 的 0-79 连续编号。常用类别：
+
+```text
+person  1
+bicycle 2
+car     3
+bus     6
+truck   8
+bird    16
+cat     17
+dog     18
+```
+
+如果想先看模型原始输出，不做类别过滤，可以用下面的诊断命令。它只跑前 5 帧，不能作为正式处理命令：
+
+```powershell
+python scripts\track_objects_rfdetr.py --classes all --device cuda --conf 0.2 --debug-detections 5 --max-frames 5
+```
+
+正式处理完整视频时不要带 `--debug-detections` 和 `--max-frames`：
+
+```powershell
+python scripts\track_objects_rfdetr.py --classes person --device cuda --conf 0.2
+```
+
+RF-DETR 脚本默认每帧刷新进度。如果想减少终端输出：
+
+```powershell
+python scripts\track_objects_rfdetr.py --classes person --device cuda --progress-every 10
+```
+
+指定 GPU：
+
+```powershell
+python scripts\track_objects_rfdetr.py --classes person --device cuda
+```
+
+强制 CPU：
+
+```powershell
+python scripts\track_objects_rfdetr.py --classes person --device cpu
+```
+
+Apple Silicon Mac 可以尝试 MPS：
+
+```bash
+python scripts/track_objects_rfdetr.py --classes person --device mps
+```
+
+指定模型大小：
+
+```powershell
+python scripts\track_objects_rfdetr.py --model-size small --classes car
+python scripts\track_objects_rfdetr.py --model-size large --classes person --conf 0.4
+```
+
+如果检测太少，降低置信度；如果重叠框太多，提高置信度或调低 NMS 阈值：
+
+```powershell
+python scripts\track_objects_rfdetr.py --classes person --device cuda --conf 0.2 --nms-threshold 0.45
+```
+
+默认会调用 RF-DETR 的 `optimize_for_inference()`。如果遇到兼容性问题，可临时关闭：
+
+```powershell
+python scripts\track_objects_rfdetr.py --classes person --device cuda --no-optimize
+```
+
+可选模型大小：
+
+```text
+nano
+small
+medium
+large
+```
+
+这些默认档位对应 RF-DETR 的 Apache 2.0 开源模型线。不要把 `plus` / XL / 2XLarge 模型混进当前脚本，除非你明确接受对应的额外许可条款。
+
+RF-DETR 当前只输出检测框；`mask_polygon` 字段会保持为空。
+
+## YOLO 离线视频检测
 
 默认运行：
 
 ```powershell
-python scripts\track_objects_stickers.py
+python scripts\track_objects_yolo.py
 ```
 
 默认行为：
@@ -61,19 +164,19 @@ python scripts\track_objects_stickers.py
 指定视频：
 
 ```powershell
-python scripts\track_objects_stickers.py --source source\your_video.mp4
+python scripts\track_objects_yolo.py --source source\your_video.mp4
 ```
 
 macOS：
 
 ```bash
-python scripts/track_objects_stickers.py --source source/your_video.mp4
+python scripts/track_objects_yolo.py --source source/your_video.mp4
 ```
 
 使用 GPU：
 
 ```powershell
-python scripts\track_objects_stickers.py --device 0
+python scripts\track_objects_yolo.py --device 0
 ```
 
 ## 常用检测命令
@@ -81,49 +184,49 @@ python scripts\track_objects_stickers.py --device 0
 检测车：
 
 ```powershell
-python scripts\track_objects_stickers.py --classes car
+python scripts\track_objects_yolo.py --classes car
 ```
 
 检测人：
 
 ```powershell
-python scripts\track_objects_stickers.py --classes person
+python scripts\track_objects_yolo.py --classes person
 ```
 
 同时检测人和车：
 
 ```powershell
-python scripts\track_objects_stickers.py --classes person,car
+python scripts\track_objects_yolo.py --classes person,car
 ```
 
 检测鸟：
 
 ```powershell
-python scripts\track_objects_stickers.py --classes bird
+python scripts\track_objects_yolo.py --classes bird
 ```
 
 降低置信度，减少漏检：
 
 ```powershell
-python scripts\track_objects_stickers.py --classes person --conf 0.1
+python scripts\track_objects_yolo.py --classes person --conf 0.1
 ```
 
 使用更大的模型：
 
 ```powershell
-python scripts\track_objects_stickers.py --model yolo11l.pt --classes person --device 0
+python scripts\track_objects_yolo.py --model yolo11l.pt --classes person --device 0
 ```
 
 每一帧都显示进度：
 
 ```powershell
-python scripts\track_objects_stickers.py --progress-every 1
+python scripts\track_objects_yolo.py --progress-every 1
 ```
 
 关闭进度显示：
 
 ```powershell
-python scripts\track_objects_stickers.py --progress-every 0
+python scripts\track_objects_yolo.py --progress-every 0
 ```
 
 ## 离线视频分割
@@ -131,14 +234,14 @@ python scripts\track_objects_stickers.py --progress-every 0
 使用 `*-seg.pt` 模型即可输出分割区域；默认 `--render auto` 会自动选择框或分割。
 
 ```powershell
-python scripts\track_objects_stickers.py --model yolo11n-seg.pt --classes person
+python scripts\track_objects_yolo.py --model yolo11n-seg.pt --classes person
 ```
 
 常用覆盖项：
 
 ```powershell
-python scripts\track_objects_stickers.py --model yolo11n-seg.pt --classes person --render both
-python scripts\track_objects_stickers.py --model yolo11n-seg.pt --classes person --mask-alpha 0.5
+python scripts\track_objects_yolo.py --model yolo11n-seg.pt --classes person --render both
+python scripts\track_objects_yolo.py --model yolo11n-seg.pt --classes person --mask-alpha 0.5
 ```
 
 ```text
@@ -159,7 +262,7 @@ person, bicycle, car, motorcycle, airplane, bus, train, truck, boat, bird, cat, 
 也可以直接用 COCO 类别 ID：
 
 ```powershell
-python scripts\track_objects_stickers.py --classes 0,2
+python scripts\track_objects_yolo.py --classes 0,2
 ```
 
 常用 ID：
