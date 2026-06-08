@@ -190,7 +190,7 @@ YOLO 离线处理视频：
 python scripts\track_objects_yolo.py
 ```
 
-离线分割视频：
+YOLO 离线分割视频：
 
 ```powershell
 python scripts\track_objects_yolo.py --model yolo11n-seg.pt --classes person
