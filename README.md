@@ -6,7 +6,7 @@
 
 主要用途：
 
-1. 用 RF-DETR 或 YOLO 离线检测并跟踪人、车、鸟等目标。
+1. 用 RF-DETR 或 YOLO 离线检测并跟踪人、车、鸟、面部等目标。
 2. RF-DETR 输出检测框；YOLO `*-seg.pt` 分割模型可输出分割区域。
 3. 输出带贴纸的视频，方便检查识别效果。
 4. 将原视频副本保存在同一个运行目录，方便整理和对照。
@@ -194,6 +194,12 @@ YOLO 离线分割视频：
 
 ```powershell
 python scripts\track_objects_yolo.py --model yolo11n-seg.pt --classes person
+```
+
+YOLO 离线检测面部：
+
+```powershell
+python scripts\track_objects_yolo.py --model yolov11n-face.pt --classes 0
 ```
 
 前端离线叠加播放器：

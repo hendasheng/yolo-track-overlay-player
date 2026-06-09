@@ -41,6 +41,9 @@ Behavior:
 - Default confidence is `0.15`.
 - Default RF-DETR confidence is `0.35`.
 - Supports `--device`, e.g. `cpu`, `0`, `mps`.
+- RF-DETR built-in pretrained models are COCO-based and do not provide a separate face class.
+- Face detection should use a dedicated YOLO face model with `--classes 0`.
+- Progress output refreshes one line in interactive terminals and falls back to line-per-update in captured logs.
 - Outputs one run folder per execution under `runs/`.
 - Run folder name includes model, class label, device label, confidence, timestamp.
 - Copies the original video into the run folder using its original filename.

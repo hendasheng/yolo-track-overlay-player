@@ -64,6 +64,12 @@ python scripts\track_objects_rfdetr.py --classes car
 python scripts\track_objects_rfdetr.py --classes person
 ```
 
+RF-DETR 预训练 COCO 模型没有独立的 `face` / 面部类别。`--classes person` 只能检测整个人体或人像区域，不能得到面部框。需要检测面部时，使用 YOLO 人脸权重：
+
+```powershell
+python scripts\track_objects_yolo.py --model yolov11n-face.pt --classes 0
+```
+
 分割人像：
 
 ```powershell
@@ -107,6 +113,8 @@ RF-DETR 脚本默认每帧刷新进度。如果想减少终端输出：
 ```powershell
 python scripts\track_objects_rfdetr.py --classes person --device cuda --progress-every 10
 ```
+
+在交互终端中，进度会在同一行动态刷新；如果输出被 IDE 或日志系统捕获，则按 `--progress-every` 间隔逐行输出。
 
 指定 GPU：
 
@@ -210,6 +218,14 @@ python scripts\track_objects_yolo.py --classes car
 python scripts\track_objects_yolo.py --classes person
 ```
 
+检测面部：
+
+```powershell
+python scripts\track_objects_yolo.py --model yolov11n-face.pt --classes 0
+```
+
+`yolov11n-face.pt` 是为面部检测下载的 YOLO 人脸模型。它不是 COCO 通用模型，类别不要写成 `person`；通常使用 `--classes 0` 过滤 face 类。需要更高精度时可以换成 `yolov11l-face.pt`。
+
 同时检测人和车：
 
 ```powershell
@@ -240,16 +256,18 @@ python scripts\track_objects_yolo.py --model yolo11l.pt --classes person --devic
 python scripts\track_objects_yolo.py --progress-every 1
 ```
 
+在交互终端中，进度会在同一行动态刷新；如果输出被 IDE 或日志系统捕获，则按 `--progress-every` 间隔逐行输出。
+
 关闭进度显示：
 
 ```powershell
 python scripts\track_objects_yolo.py --progress-every 0
+```
 
 只跑前几帧做验证：
 
 ```powershell
 python scripts\track_objects_yolo.py --classes person --device 0 --max-frames 3 --progress-every 1
-```
 ```
 
 ## 离线视频分割
@@ -321,6 +339,15 @@ yolo11m-seg.pt
 yolo11l-seg.pt
 yolo11x-seg.pt
 ```
+
+面部检测使用专门的人脸权重：
+
+```text
+yolov11n-face.pt  面部检测小模型，速度快
+yolov11l-face.pt  面部检测大模型，更准更慢
+```
+
+运行人脸模型时通常配合 `--classes 0`，不要使用 COCO 的 `person` 类别名。
 
 建议顺序：
 

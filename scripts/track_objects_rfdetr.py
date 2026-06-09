@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -255,6 +256,16 @@ def bgr_to_hex(color):
 
 def safe_name(value):
     return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in value)
+
+
+def print_progress(message):
+    if sys.stdout.isatty():
+        width = shutil.get_terminal_size((120, 20)).columns
+        if width > 1 and len(message) >= width:
+            message = message[: width - 1]
+        print(f"\r{message}\033[K", end="", flush=True)
+    else:
+        print(message, flush=True)
 
 
 def parse_classes(value):
@@ -592,11 +603,9 @@ def main():
                     progress = f"{frame_index}/{total_frames} ({percent:5.1f}%)"
                 else:
                     progress = f"{frame_index} frames"
-                print(
-                    f"\rProcessing {progress} | {process_fps:5.1f} fps | "
-                    f"objects in frame: {len(frame_records)}",
-                    end="",
-                    flush=True,
+                print_progress(
+                    f"Processing {progress} | {process_fps:5.1f} fps | "
+                    f"objects in frame: {len(frame_records)}"
                 )
 
             if args.show:
