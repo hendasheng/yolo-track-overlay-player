@@ -205,8 +205,13 @@ python scripts\track_objects_yolo.py --model yolov11n-face.pt --classes 0
 前端离线叠加播放器：
 
 ```powershell
+# Windows CPU（venv 环境）
 cd web_track_overlay_player
 ..\video-track-cpu-env\Scripts\python.exe -m http.server 8090 --bind 127.0.0.1
+
+# Windows GPU（conda 环境）
+cd web_track_overlay_player
+..\video-track-gpu-env\python.exe -m http.server 8090 --bind 127.0.0.1
 ```
 
 打开：

@@ -417,11 +417,20 @@ web_track_overlay_player/
 
 不要直接双击 `index.html`。浏览器的 `file://` 安全限制可能导致拖拽视频失败。
 
-Windows：
+不论 CPU 还是 GPU 环境，任何一个可用的 Python 都能启动，选当前已有的即可。
+
+Windows（CPU venv 环境）：
 
 ```powershell
 cd web_track_overlay_player
 ..\video-track-cpu-env\Scripts\python.exe -m http.server 8090 --bind 127.0.0.1
+```
+
+Windows（GPU conda 环境）：
+
+```powershell
+cd web_track_overlay_player
+..\video-track-gpu-env\python.exe -m http.server 8090 --bind 127.0.0.1
 ```
 
 macOS：
